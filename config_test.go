@@ -1,4 +1,4 @@
-package velocitab
+package bettertab
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 
 func TestConfigStoreLoadAndMatch(t *testing.T) {
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "velocitab.toml")
+	configPath := filepath.Join(tmpDir, "bettertab.toml")
 
 	testTOML := `
 update_interval_ms = 500

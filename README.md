@@ -1,9 +1,9 @@
-# Gate Velocitab
+# Gate BetterTab
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/andreisugu/gate-velocitab.svg)](https://pkg.go.dev/github.com/andreisugu/gate-velocitab)
+[![Go Reference](https://pkg.go.dev/badge/github.com/andreisugu/gate-bettertab.svg)](https://pkg.go.dev/github.com/andreisugu/gate-bettertab)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An ultra-high performance, customizable **TAB list & player list formatting extension** for the [Gate Minecraft proxy](https://github.com/minekube/gate), inspired by [Velocitab](https://github.com/WiIIiam278/Velocitab).
+An ultra-high performance, feature-packed **TAB list & player list formatting extension** for the [Gate Minecraft proxy](https://github.com/minekube/gate).
 
 ---
 
@@ -11,12 +11,13 @@ An ultra-high performance, customizable **TAB list & player list formatting exte
 
 - 🌈 **Full RGB, MiniMessage & Legacy Formatting**: Supports `<rainbow>`, `<gradient:#from:#to>`, `<#RRGGBB>`, `<gold>`, `<b>`, `<i>`, and classic `&a`, `&l`, `&#RRGGBB` color codes.
 - 🎬 **Animated Headers & Footers**: Define multiple frames in arrays — they cycle smoothly at your configured update interval.
-- 🏷️ **Custom Server Groups**: Group backend servers together and display completely unique TAB menus for each group.
+- 🏷️ **Custom Server Groups**: Group backend servers together and display completely unique TAB menus for each group with regex support.
 - 👑 **Role System & Prefixes/Suffixes**: Define custom prefixes, suffixes, and sorting weights for Admins, Mods, VIPs, and players.
-- 🔢 **Native List Ordering & Sorting**: Automatically sorts player entries by role weight and username.
-- 🌐 **Global or Per-Server Isolation**: Choose whether players see all network players across all servers, or only players on their current backend server.
+- 🔢 **Native List Ordering & Sorting**: Automatically sorts player entries by role hierarchy and username in Minecraft's TAB menu.
+- 🌐 **Global or Per-Server Isolation**: Choose whether players see all network players across all servers, or only players on their current backend server (`only_list_players_in_same_server`).
 - ⚡ **Zero Backend Plugins Required**: Works 100% on the proxy level with zero overhead and lock-free thread safety.
-- 🔄 **Live Hot-Reload**: Update headers, footers, formats, and groups in-game with `/velocitab reload`.
+- 🔄 **Live Hot-Reload**: Update headers, footers, formats, and groups in-game with `/bettertab reload`.
+- 🎭 **Custom Nicknames & Personal Toggles**: Players can set personal tab display names with `/bettertab name <name>` or toggle tablist formatting with `/bettertab toggle`.
 
 ---
 
@@ -25,27 +26,27 @@ An ultra-high performance, customizable **TAB list & player list formatting exte
 ### In Pelican / Pterodactyl Panel
 Add the plugin package to your **Gate Go Plugins (List)** variable:
 ```text
-github.com/andreisugu/gate-velocitab
+github.com/andreisugu/gate-bettertab
 ```
-*(Combine with other plugins: `github.com/andreisugu/gate-simplewhitelist, github.com/andreisugu/gate-hybridforwarding, github.com/andreisugu/gate-velocitab`)*
+*(Combine with other plugins: `github.com/andreisugu/gate-simplewhitelist, github.com/andreisugu/gate-hybridforwarding, github.com/andreisugu/gate-bettertab`)*
 
 ### In Go Code
 ```bash
-go get github.com/andreisugu/gate-velocitab
+go get github.com/andreisugu/gate-bettertab
 ```
 
 ```go
 package main
 
 import (
-	"github.com/andreisugu/gate-velocitab"
+	"github.com/andreisugu/gate-bettertab"
 	"go.minekube.com/gate/cmd/gate"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
 )
 
 func main() {
 	proxy.Plugins = append(proxy.Plugins,
-		velocitab.Plugin,
+		bettertab.Plugin,
 	)
 	gate.Execute()
 }
@@ -53,7 +54,7 @@ func main() {
 
 ---
 
-## ⚙️ Configuration (`config/velocitab.toml`)
+## ⚙️ Configuration (`config/bettertab.toml`)
 
 ```toml
 # Main settings
@@ -81,7 +82,7 @@ weight = 0
 
 # Assign players to roles
 [player_roles]
-# player_name = "admin"
+# andrei = "owner"
 
 # Server groups
 [[groups]]
@@ -102,7 +103,7 @@ footers = [
     "<gray>Players on <aqua>%server%</aqua>: <yellow>%local_players_online%</yellow></gray>\n<aqua>discord.gg/example</aqua>",
 ]
 
-# Player format in the TAB list
+# Tablist entry format
 format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>%suffix%"
 
 # Custom replacements (e.g. pretty server badges)
@@ -116,20 +117,26 @@ format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>
 
 | Placeholder | Description |
 | :--- | :--- |
-| `%username%` | Player's username |
+| `%username%` | Player's username (or custom name if set) |
 | `%username_lower%` | Lowercase player username |
 | `%server%` | Current backend server name (with replacements applied) |
 | `%raw_server%` | Raw backend server name without replacements |
+| `%server_group%` | Current active server group name |
 | `%ping%` | Player's connection ping in milliseconds |
+| `%ping_colored%` | Color-coded ping (green / yellow / red) |
 | `%players_online%` | Total online players connected to the proxy |
 | `%max_players_online%` | Max player limit set in proxy config |
 | `%local_players_online%`| Players on the current backend server |
+| `%server_online_players_<srv>%`| Online players on a specific server (e.g. `%server_online_players_smp%`) |
 | `%group_players_online%`| Players in the current tab group |
+| `%group_players_online_<grp>%`| Online players in a specific group |
 | `%current_date%` | Formatted current date (`YYYY-MM-DD`) |
 | `%current_time%` | Formatted current time (`HH:mm:ss`) |
 | `%prefix%` | Player's role prefix |
 | `%suffix%` | Player's role suffix |
+| `%role%` | Player's role name |
 | `%role_weight%` | Player's role sorting weight |
+| `%condition: A < B ? C : D%` | Conditional evaluation |
 
 ---
 
@@ -137,8 +144,12 @@ format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>
 
 | Command | Permission | Description |
 | :--- | :--- | :--- |
-| `/velocitab reload` | Console / Op | Hot-reloads `config/velocitab.toml` instantly without restarting the proxy. |
-| `/gatetab reload` | Console / Op | Alias for `/velocitab reload`. |
+| `/bettertab reload` | Console / Op | Hot-reloads `config/bettertab.toml` with zero proxy restarts. |
+| `/bettertab name <name>` | All | Sets a custom personal display name in the TAB list. |
+| `/bettertab reset` | All | Resets custom TAB display name back to original username. |
+| `/bettertab toggle` | All | Toggles custom TAB list formatting on/off for the player. |
+| `/bettertab info` | All | Shows active server, group, role, ping, and online statistics. |
+| `/btab` | All | Short alias for `/bettertab`. |
 
 ---
 

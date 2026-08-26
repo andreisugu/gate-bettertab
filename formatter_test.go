@@ -1,4 +1,4 @@
-package velocitab
+package bettertab
 
 import (
 	"strings"

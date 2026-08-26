@@ -1,4 +1,4 @@
-package velocitab
+package bettertab
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ import (
 )
 
 const defaultConfigTemplate = `# =============================================================================
-#                 Gate Velocitab Configuration
+#                 Gate BetterTab Configuration
 # =============================================================================
 # High-performance, customizable tab list and player list formatting.
 # =============================================================================
@@ -160,13 +160,13 @@ func (cs *ConfigStore) Load() (*Config, error) {
 			_ = os.MkdirAll(dir, 0o755)
 		}
 		if err := os.WriteFile(cs.path, []byte(defaultConfigTemplate), 0o644); err != nil {
-			return nil, fmt.Errorf("failed to create default velocitab config: %w", err)
+			return nil, fmt.Errorf("failed to create default bettertab config: %w", err)
 		}
 	}
 
 	data, err := os.ReadFile(cs.path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read velocitab config %q: %w", cs.path, err)
+		return nil, fmt.Errorf("failed to read bettertab config %q: %w", cs.path, err)
 	}
 
 	var cfg Config

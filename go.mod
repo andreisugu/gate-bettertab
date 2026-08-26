@@ -1,4 +1,4 @@
-module github.com/andreisugu/gate-velocitab
+module github.com/andreisugu/gate-bettertab
 
 go 1.26
 
