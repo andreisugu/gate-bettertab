@@ -52,6 +52,10 @@ func (tm *TabManager) Start(ctx context.Context) {
 
 // UpdateAll synchronizes headers, footers, display names, and list ordering across all active connections.
 func (tm *TabManager) UpdateAll() {
+	defer func() {
+		_ = recover()
+	}()
+
 	allPlayers := tm.proxy.Players()
 	totalOnline := len(allPlayers)
 	if totalOnline == 0 {
@@ -88,6 +92,9 @@ func (tm *TabManager) UpdateAll() {
 
 	// 2. Update each viewer
 	for _, viewer := range allPlayers {
+		if !viewer.Active() {
+			continue
+		}
 		// Check if viewer has disabled custom tab list
 		if tm.states.IsTabDisabled(viewer.ID()) {
 			continue
