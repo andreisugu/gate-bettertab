@@ -260,6 +260,29 @@ func (cs *ConfigStore) GetRoleForPlayer(username string) Role {
 	return Role{Weight: 0}
 }
 
+// GetRoleWithInfo returns the role and its role key name.
+func (cs *ConfigStore) GetRoleWithInfo(username string) (Role, string) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	if cs.cfg == nil {
+		return Role{Weight: 0}, "default"
+	}
+
+	cleanUser := strings.ToLower(strings.TrimSpace(username))
+	if roleName, ok := cs.cfg.PlayerRoles[cleanUser]; ok {
+		if role, found := cs.cfg.Roles[roleName]; found {
+			return role, roleName
+		}
+	}
+
+	if defaultRole, found := cs.cfg.Roles["default"]; found {
+		return defaultRole, "default"
+	}
+
+	return Role{Weight: 0}, "default"
+}
+
 // GetConfig returns the current Config snapshot.
 func (cs *ConfigStore) GetConfig() *Config {
 	cs.mu.RLock()

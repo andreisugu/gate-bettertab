@@ -15,16 +15,18 @@ import (
 type TabManager struct {
 	proxy     *proxy.Proxy
 	store     *ConfigStore
+	states    *PlayerStateManager
 	log       logr.Logger
 	animFrame atomic.Uint64
 }
 
 // NewTabManager creates a new TabManager instance.
-func NewTabManager(p *proxy.Proxy, store *ConfigStore, log logr.Logger) *TabManager {
+func NewTabManager(p *proxy.Proxy, store *ConfigStore, states *PlayerStateManager, log logr.Logger) *TabManager {
 	return &TabManager{
-		proxy: p,
-		store: store,
-		log:   log,
+		proxy:  p,
+		store:  store,
+		states: states,
+		log:    log,
 	}
 }
 
@@ -86,25 +88,36 @@ func (tm *TabManager) UpdateAll() {
 
 	// 2. Update each viewer
 	for _, viewer := range allPlayers {
+		// Check if viewer has disabled custom tab list
+		if tm.states.IsTabDisabled(viewer.ID()) {
+			continue
+		}
+
 		viewerServer := playerServerMap[viewer.ID()]
 		group := tm.store.GetGroupForServer(viewerServer)
 		if group == nil {
 			continue
 		}
 
-		viewerRole := tm.store.GetRoleForPlayer(viewer.Username())
+		viewerCustomName, _ := tm.states.GetCustomName(viewer.ID())
+		viewerRole, viewerRoleName := tm.store.GetRoleWithInfo(viewer.Username())
+
 		viewerCtx := &PlaceholderContext{
 			Player:           viewer,
+			CustomName:       viewerCustomName,
 			ServerName:       viewerServer,
 			ProxyPlayerCount: totalOnline,
 			MaxPlayers:       maxPlayers,
 			LocalPlayerCount: serverCounts[viewerServer],
 			GroupPlayerCount: groupCounts[strings.ToLower(group.Name)],
+			ServerCounts:     serverCounts,
+			GroupCounts:      groupCounts,
 			Role:             viewerRole,
+			RoleName:         viewerRoleName,
 			Group:            group,
 		}
 
-		// --- Update Header & Footer ---
+		// --- Update Animated Header & Footer ---
 		var headerRaw, footerRaw string
 		if len(group.Headers) > 0 {
 			hIdx := int(frame % uint64(len(group.Headers)))
@@ -123,7 +136,7 @@ func (tm *TabManager) UpdateAll() {
 			FormatText(footerFormatted),
 		)
 
-		// --- Update Player Entries ---
+		// --- Update Player Entries in Tab List ---
 		entries := viewer.TabList().Entries()
 
 		for _, target := range allPlayers {
@@ -131,7 +144,6 @@ func (tm *TabManager) UpdateAll() {
 
 			// Check server isolation mode
 			if group.OnlyListPlayersInSameServer && !strings.EqualFold(viewerServer, targetServer) {
-				// Hide players on different servers
 				if entry, exists := entries[target.ID()]; exists {
 					_ = entry.SetListed(false)
 				}
@@ -145,19 +157,25 @@ func (tm *TabManager) UpdateAll() {
 
 			_ = entry.SetListed(true)
 
-			targetRole := tm.store.GetRoleForPlayer(target.Username())
+			targetCustomName, _ := tm.states.GetCustomName(target.ID())
+			targetRole, targetRoleName := tm.store.GetRoleWithInfo(target.Username())
+
 			targetCtx := &PlaceholderContext{
 				Player:           target,
+				CustomName:       targetCustomName,
 				ServerName:       targetServer,
 				ProxyPlayerCount: totalOnline,
 				MaxPlayers:       maxPlayers,
 				LocalPlayerCount: serverCounts[targetServer],
 				GroupPlayerCount: groupCounts[strings.ToLower(group.Name)],
+				ServerCounts:     serverCounts,
+				GroupCounts:      groupCounts,
 				Role:             targetRole,
+				RoleName:         targetRoleName,
 				Group:            group,
 			}
 
-			// Format display name
+			// Format display name with placeholders & colors
 			displayNameRaw := ReplacePlaceholders(group.Format, targetCtx)
 			_ = entry.SetDisplayName(FormatText(displayNameRaw))
 
@@ -173,12 +191,13 @@ func (tm *TabManager) UpdateAll() {
 	}
 }
 
-// HandleServerSwitch immediately updates the player's tablist state upon switching servers.
+// HandleServerSwitch immediately updates tablist state upon switching servers.
 func (tm *TabManager) HandleServerSwitch(player proxy.Player, targetServer string) {
 	tm.UpdateAll()
 }
 
-// HandlePlayerDisconnect cleans up upon player logout.
+// HandlePlayerDisconnect cleans up state and updates remaining players upon logout.
 func (tm *TabManager) HandlePlayerDisconnect(player proxy.Player) {
+	tm.states.RemovePlayer(player.ID())
 	tm.UpdateAll()
 }
