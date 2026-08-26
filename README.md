@@ -28,7 +28,6 @@ Add the plugin package to your **Gate Go Plugins (List)** variable:
 ```text
 github.com/andreisugu/gate-bettertab
 ```
-*(Combine with other plugins: `github.com/andreisugu/gate-simplewhitelist, github.com/andreisugu/gate-hybridforwarding, github.com/andreisugu/gate-bettertab`)*
 
 ### In Go Code
 ```bash
