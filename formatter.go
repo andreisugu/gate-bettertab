@@ -12,12 +12,21 @@ import (
 )
 
 var (
-	hexCodeRegex    = regexp.MustCompile(`(?i)&?#([0-9a-f]{6})`)
-	tagHexRegex     = regexp.MustCompile(`(?i)<#([0-9a-f]{6})>`)
-	tagColorRegex   = regexp.MustCompile(`(?i)<color:#([0-9a-f]{6})>`)
-	gradientRegex   = regexp.MustCompile(`(?i)<gradient:#([0-9a-f]{6}):#([0-9a-f]{6})>(.*?)</gradient>`)
-	rainbowRegex    = regexp.MustCompile(`(?i)<rainbow>(.*?)</rainbow>`)
-	legacyColorMap  = map[rune]color.Color{
+	// Rainbow tag supporting <rainbow>, <rainbow:10>, <rainbow:!2>, <rainbow:!>, <rainbow:reversed:5>
+	rainbowTagRegex = regexp.MustCompile(`(?i)<rainbow(?::(!)?(?:reversed)?:?([0-9.-]+)?)?>(.*?)</rainbow(?::[^>]*)?>`)
+	
+	// MineDown inline rainbow: &rainbow&Text or &rainbow:20&Text
+	mineDownRainbowRegex = regexp.MustCompile(`(?i)&rainbow(?::([0-9.-]+))?&(.*?)(?:&r|&reset|&rainbow&|$)`)
+
+	// Multi-stop gradient regex: <gradient:#c1:#c2:...[:phase]>Text</gradient>
+	gradientTagRegex = regexp.MustCompile(`(?i)<gradient:([^>]+)>(.*?)</gradient>`)
+
+	// Color tags
+	tagHexRegex   = regexp.MustCompile(`(?i)<#([0-9a-f]{6})>`)
+	tagShortHex   = regexp.MustCompile(`(?i)<#([0-9a-f]{3})>`)
+	tagColorRegex = regexp.MustCompile(`(?i)<color:#([0-9a-f]{6})>`)
+
+	legacyColorMap = map[rune]color.Color{
 		'0': color.Black,
 		'1': color.DarkBlue,
 		'2': color.DarkGreen,
@@ -35,60 +44,96 @@ var (
 		'e': color.Yellow,
 		'f': color.White,
 	}
-	namedColorMap = map[string]color.Color{
-		"black":        color.Black,
-		"dark_blue":    color.DarkBlue,
-		"dark_green":   color.DarkGreen,
-		"dark_aqua":    color.DarkAqua,
-		"dark_red":     color.DarkRed,
-		"dark_purple":  color.DarkPurple,
-		"gold":         color.Gold,
-		"gray":         color.Gray,
-		"grey":         color.Gray,
-		"dark_gray":    color.DarkGray,
-		"dark_grey":    color.DarkGray,
-		"blue":         color.Blue,
-		"green":        color.Green,
-		"aqua":         color.Aqua,
-		"red":          color.Red,
-		"light_purple": color.LightPurple,
-		"pink":         color.LightPurple,
-		"yellow":       color.Yellow,
-		"white":        color.White,
+
+	namedColorHexMap = map[string]string{
+		"black":        "#000000",
+		"dark_blue":    "#0000aa",
+		"dark_green":   "#00aa00",
+		"dark_aqua":    "#00aaaa",
+		"dark_red":     "#aa0000",
+		"dark_purple":  "#aa00aa",
+		"gold":         "#ffaa00",
+		"gray":         "#aaaaaa",
+		"grey":         "#aaaaaa",
+		"dark_gray":    "#555555",
+		"dark_grey":    "#555555",
+		"blue":         "#5555ff",
+		"green":        "#55ff55",
+		"aqua":         "#55ffff",
+		"red":          "#ff5555",
+		"light_purple": "#ff55ff",
+		"pink":         "#ff55ff",
+		"yellow":       "#ffff55",
+		"white":        "#ffffff",
 	}
 )
 
-// FormatText parses MiniMessage & Legacy color syntax into a Minecraft Component.
+// FormatText parses MiniMessage, MineDown, and Legacy color syntax into a native Minecraft Component.
 func FormatText(input string) c.Component {
 	if input == "" {
 		return &c.Text{Content: ""}
 	}
 
-	// 1. Process <gradient> tags
-	input = gradientRegex.ReplaceAllStringFunc(input, func(m string) string {
-		sub := gradientRegex.FindStringSubmatch(m)
+	// 1. Process Adventure / MiniMessage <rainbow> tags with phase and reverse support
+	input = rainbowTagRegex.ReplaceAllStringFunc(input, func(m string) string {
+		sub := rainbowTagRegex.FindStringSubmatch(m)
 		if len(sub) < 4 {
 			return m
 		}
-		fromHex, toHex, text := sub[1], sub[2], sub[3]
-		return applyGradient(text, fromHex, toHex)
+		isReversed := sub[1] == "!" || strings.Contains(strings.ToLower(m), "reversed")
+		phase := 0.0
+		if sub[2] != "" {
+			if parsed, err := strconv.ParseFloat(sub[2], 64); err == nil {
+				phase = parsed
+			}
+		}
+		text := sub[3]
+		return applyRainbow(text, phase, isReversed)
 	})
 
-	// 2. Process <rainbow> tags
-	input = rainbowRegex.ReplaceAllStringFunc(input, func(m string) string {
-		sub := rainbowRegex.FindStringSubmatch(m)
+	// 2. Process MineDown &rainbow[:phase]& inline syntax
+	input = mineDownRainbowRegex.ReplaceAllStringFunc(input, func(m string) string {
+		sub := mineDownRainbowRegex.FindStringSubmatch(m)
+		if len(sub) < 3 {
+			return m
+		}
+		phase := 0.0
+		if sub[1] != "" {
+			if parsed, err := strconv.ParseFloat(sub[1], 64); err == nil {
+				phase = parsed
+			}
+		}
+		text := sub[2]
+		return applyRainbow(text, phase, false)
+	})
+
+	// 3. Process <gradient:...> tags (multi-stop supported)
+	input = gradientTagRegex.ReplaceAllStringFunc(input, func(m string) string {
+		sub := gradientTagRegex.FindStringSubmatch(m)
+		if len(sub) < 3 {
+			return m
+		}
+		colorDefs := sub[1]
+		text := sub[2]
+		return applyMultiGradient(text, colorDefs)
+	})
+
+	// 4. Normalize short hex tags like <#fff> -> <#ffffff>
+	input = tagShortHex.ReplaceAllStringFunc(input, func(m string) string {
+		sub := tagShortHex.FindStringSubmatch(m)
 		if len(sub) < 2 {
 			return m
 		}
-		return applyRainbow(sub[1])
+		s := sub[1]
+		return fmt.Sprintf("<#%c%c%c%c%c%c>", s[0], s[0], s[1], s[1], s[2], s[2])
 	})
 
-	// 3. Convert MiniMessage style & color tags to internal legacy markers
+	// 5. Convert MiniMessage style & color tags to internal markers
 	input = tagHexRegex.ReplaceAllString(input, "&#$1")
 	input = tagColorRegex.ReplaceAllString(input, "&#$1")
 
-	for name := range namedColorMap {
-		input = strings.ReplaceAll(input, fmt.Sprintf("<%s>", name), namedColorToLegacy(name))
+	for name, hex := range namedColorHexMap {
+		input = strings.ReplaceAll(input, fmt.Sprintf("<%s>", name), "&#"+strings.TrimPrefix(hex, "#"))
 		input = strings.ReplaceAll(input, fmt.Sprintf("</%s>", name), "&r")
 	}
 
@@ -118,47 +163,8 @@ func FormatText(input string) c.Component {
 	input = strings.ReplaceAll(input, "<r>", "&r")
 	input = strings.ReplaceAll(input, "</r>", "&r")
 
-	// 4. Parse tokenized string into Component tree
+	// 6. Parse tokenized string into Component tree
 	return parseLegacyTokens(input)
-}
-
-func namedColorToLegacy(name string) string {
-	switch strings.ToLower(name) {
-	case "black":
-		return "&0"
-	case "dark_blue":
-		return "&1"
-	case "dark_green":
-		return "&2"
-	case "dark_aqua":
-		return "&3"
-	case "dark_red":
-		return "&4"
-	case "dark_purple":
-		return "&5"
-	case "gold":
-		return "&6"
-	case "gray", "grey":
-		return "&7"
-	case "dark_gray", "dark_grey":
-		return "&8"
-	case "blue":
-		return "&9"
-	case "green":
-		return "&a"
-	case "aqua":
-		return "&b"
-	case "red":
-		return "&c"
-	case "light_purple", "pink":
-		return "&d"
-	case "yellow":
-		return "&e"
-	case "white":
-		return "&f"
-	default:
-		return "&f"
-	}
 }
 
 func parseLegacyTokens(s string) c.Component {
@@ -277,9 +283,78 @@ func parseLegacyTokens(s string) c.Component {
 	return root
 }
 
-func applyGradient(text, fromHex, toHex string) string {
-	fromR, fromG, fromB := hexToRGB(fromHex)
-	toR, toG, toB := hexToRGB(toHex)
+// applyRainbow uses the exact sine-wave color formula from Kyori Adventure / MineDown / Velocitab.
+//
+// In Adventure MiniMessage:
+//
+//	float fPhase = phase / 10f;
+//	float center = 128;
+//	float width = 127;
+//	double frequency = Math.PI * 2 / length;
+//
+//	Red   = sin(frequency * i + 2 + fPhase) * width + center
+//	Green = sin(frequency * i + 0 + fPhase) * width + center
+//	Blue  = sin(frequency * i + 4 + fPhase) * width + center
+func applyRainbow(text string, phase float64, reversed bool) string {
+	runes := []rune(text)
+	length := len(runes)
+	if length == 0 {
+		return ""
+	}
+
+	fPhase := phase / 10.0
+	center := 128.0
+	width := 127.0
+	frequency := (math.Pi * 2.0) / float64(length)
+	if reversed {
+		frequency = -frequency
+	}
+
+	var b strings.Builder
+	for i, r := range runes {
+		idx := float64(i)
+		rVal := math.Sin(frequency*idx+2.0+fPhase)*width + center
+		gVal := math.Sin(frequency*idx+0.0+fPhase)*width + center
+		bVal := math.Sin(frequency*idx+4.0+fPhase)*width + center
+
+		curR := clamp(int(math.Round(rVal)))
+		curG := clamp(int(math.Round(gVal)))
+		curB := clamp(int(math.Round(bVal)))
+
+		b.WriteString(fmt.Sprintf("&#%02x%02x%02x%c", curR, curG, curB, r))
+	}
+	return b.String()
+}
+
+// applyMultiGradient interpolates multiple color stops across the text length.
+func applyMultiGradient(text string, colorDefs string) string {
+	parts := strings.Split(colorDefs, ":")
+	if len(parts) < 2 {
+		return text
+	}
+
+	var colors [][3]int
+	for _, p := range parts {
+		clean := strings.TrimSpace(p)
+		if clean == "" {
+			continue
+		}
+		// Check if it's a number (phase option)
+		if _, err := strconv.ParseFloat(clean, 64); err == nil && len(colors) >= 2 {
+			continue
+		}
+		if hex, ok := parseColorToHex(clean); ok {
+			r, g, b := hexToRGB(hex)
+			colors = append(colors, [3]int{r, g, b})
+		}
+	}
+
+	if len(colors) == 0 {
+		return text
+	}
+	if len(colors) == 1 {
+		return fmt.Sprintf("&#%02x%02x%02x%s", colors[0][0], colors[0][1], colors[0][2], text)
+	}
 
 	runes := []rune(text)
 	length := len(runes)
@@ -287,34 +362,48 @@ func applyGradient(text, fromHex, toHex string) string {
 		return ""
 	}
 	if length == 1 {
-		return fmt.Sprintf("&#%s%s", fromHex, text)
+		return fmt.Sprintf("&#%02x%02x%02x%c", colors[0][0], colors[0][1], colors[0][2], runes[0])
 	}
 
+	numSegments := len(colors) - 1
 	var b strings.Builder
-	for idx, r := range runes {
-		ratio := float64(idx) / float64(length-1)
-		curR := int(math.Round(float64(fromR) + ratio*float64(toR-fromR)))
-		curG := int(math.Round(float64(fromG) + ratio*float64(toG-fromG)))
-		curB := int(math.Round(float64(fromB) + ratio*float64(toB-fromB)))
+
+	for i, r := range runes {
+		progress := float64(i) / float64(length-1)
+		scaledProgress := progress * float64(numSegments)
+		segIdx := int(math.Floor(scaledProgress))
+		if segIdx >= numSegments {
+			segIdx = numSegments - 1
+		}
+		segProgress := scaledProgress - float64(segIdx)
+
+		c1 := colors[segIdx]
+		c2 := colors[segIdx+1]
+
+		curR := clamp(int(math.Round(float64(c1[0]) + segProgress*float64(c2[0]-c1[0]))))
+		curG := clamp(int(math.Round(float64(c1[1]) + segProgress*float64(c2[1]-c1[1]))))
+		curB := clamp(int(math.Round(float64(c1[2]) + segProgress*float64(c2[2]-c1[2]))))
+
 		b.WriteString(fmt.Sprintf("&#%02x%02x%02x%c", curR, curG, curB, r))
 	}
+
 	return b.String()
 }
 
-func applyRainbow(text string) string {
-	runes := []rune(text)
-	length := len(runes)
-	if length == 0 {
-		return ""
+func parseColorToHex(s string) (string, bool) {
+	s = strings.TrimPrefix(s, "#")
+	if len(s) == 3 {
+		s = fmt.Sprintf("%c%c%c%c%c%c", s[0], s[0], s[1], s[1], s[2], s[2])
 	}
-
-	var b strings.Builder
-	for idx, r := range runes {
-		hue := float64(idx) / float64(length)
-		curR, curG, curB := hsvToRGB(hue, 0.85, 1.0)
-		b.WriteString(fmt.Sprintf("&#%02x%02x%02x%c", curR, curG, curB, r))
+	if len(s) == 6 {
+		if _, err := strconv.ParseInt(s, 16, 32); err == nil {
+			return "#" + s, true
+		}
 	}
-	return b.String()
+	if hex, ok := namedColorHexMap[strings.ToLower(s)]; ok {
+		return hex, true
+	}
+	return "", false
 }
 
 func hexToRGB(hex string) (int, int, int) {
@@ -325,27 +414,12 @@ func hexToRGB(hex string) (int, int, int) {
 	return int((val >> 16) & 0xFF), int((val >> 8) & 0xFF), int(val & 0xFF)
 }
 
-func hsvToRGB(h, s, v float64) (int, int, int) {
-	i := math.Floor(h * 6)
-	f := h*6 - i
-	p := v * (1 - s)
-	q := v * (1 - f*s)
-	t := v * (1 - (1-f)*s)
-
-	var r, g, b float64
-	switch int(i) % 6 {
-	case 0:
-		r, g, b = v, t, p
-	case 1:
-		r, g, b = q, v, p
-	case 2:
-		r, g, b = p, v, t
-	case 3:
-		r, g, b = p, q, v
-	case 4:
-		r, g, b = t, p, v
-	case 5:
-		r, g, b = v, p, q
+func clamp(v int) int {
+	if v < 0 {
+		return 0
 	}
-	return int(r * 255), int(g * 255), int(b * 255)
+	if v > 255 {
+		return 255
+	}
+	return v
 }
