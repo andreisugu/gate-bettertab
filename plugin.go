@@ -57,6 +57,9 @@ var Plugin = proxy.Plugin{
 					})
 				})).
 				Then(brigodier.Literal("reload").
+					Requires(command.Requires(func(c *command.RequiresContext) bool {
+						return c.Source.HasPermission("bettertab.reload") || c.Source.HasPermission("bettertab.admin") || c.Source.HasPermission("*")
+					})).
 					Executes(command.Command(func(cmdCtx *command.Context) error {
 						if _, err := store.Load(); err != nil {
 							return cmdCtx.Source.SendMessage(&c.Text{Content: fmt.Sprintf("§c[BetterTab] Reload failed: %v", err)})
@@ -66,6 +69,9 @@ var Plugin = proxy.Plugin{
 					})),
 				).
 				Then(brigodier.Literal("reset").
+					Requires(command.Requires(func(c *command.RequiresContext) bool {
+						return c.Source.HasPermission("bettertab.reset") || c.Source.HasPermission("bettertab.name") || c.Source.HasPermission("bettertab.admin") || c.Source.HasPermission("*")
+					})).
 					Executes(command.Command(func(cmdCtx *command.Context) error {
 						player, ok := cmdCtx.Source.(proxy.Player)
 						if !ok {
@@ -119,6 +125,9 @@ var Plugin = proxy.Plugin{
 					})),
 				).
 				Then(brigodier.Literal("name").
+					Requires(command.Requires(func(c *command.RequiresContext) bool {
+						return c.Source.HasPermission("bettertab.name") || c.Source.HasPermission("bettertab.admin") || c.Source.HasPermission("*")
+					})).
 					Then(brigodier.Argument("new_name", brigodier.String).
 						Executes(command.Command(func(cmdCtx *command.Context) error {
 							player, ok := cmdCtx.Source.(proxy.Player)
@@ -128,6 +137,10 @@ var Plugin = proxy.Plugin{
 							newName := cmdCtx.String("new_name")
 							if strings.TrimSpace(newName) == "" {
 								return cmdCtx.Source.SendMessage(&c.Text{Content: "§cName cannot be empty."})
+							}
+							if (strings.Contains(newName, "&") || strings.Contains(newName, "§") || strings.Contains(newName, "<")) &&
+								!player.HasPermission("bettertab.name.color") && !player.HasPermission("bettertab.admin") && !player.HasPermission("*") {
+								return cmdCtx.Source.SendMessage(&c.Text{Content: "§cYou do not have permission to use color or formatting tags in your TAB name (bettertab.name.color)."})
 							}
 							states.SetCustomName(player.ID(), newName)
 							tabMgr.UpdateAll()
