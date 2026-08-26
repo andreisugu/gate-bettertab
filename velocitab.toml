@@ -1,0 +1,74 @@
+# =============================================================================
+#                 Gate Velocitab Configuration
+# =============================================================================
+# High-performance, customizable tab list and player list formatting for Gate.
+# =============================================================================
+
+# Main settings
+update_interval_ms = 1000
+sort_players = true
+default_group = "default"
+
+# -----------------------------------------------------------------------------
+# Player Roles & Prefixes / Suffixes
+# -----------------------------------------------------------------------------
+# Higher weight means the role appears higher in the TAB list sort order.
+[roles.owner]
+prefix = "<dark_red>[Owner] </dark_red>"
+suffix = ""
+weight = 1000
+
+[roles.admin]
+prefix = "<red>[Admin] </red>"
+suffix = ""
+weight = 500
+
+[roles.mod]
+prefix = "<gold>[Mod] </gold>"
+suffix = ""
+weight = 250
+
+[roles.vip]
+prefix = "<green>[VIP] </green>"
+suffix = ""
+weight = 100
+
+[roles.default]
+prefix = "<gray>"
+suffix = "</gray>"
+weight = 0
+
+# Assign players to roles (lowercase usernames)
+[player_roles]
+# andrei = "owner"
+
+# -----------------------------------------------------------------------------
+# Server Groups
+# -----------------------------------------------------------------------------
+# Define tab list formatting for specific backend server groups.
+# If multiple headers/footers are provided, they will animate in a smooth cycle.
+
+[[groups]]
+name = "default"
+servers = ["*"]
+only_list_players_in_same_server = false
+sorting_placeholders = ["%role_weight%", "%username_lower%"]
+
+# Animated header frames
+headers = [
+    "<rainbow>═══ Minecraft Proxy Network ═══</rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
+    "<rainbow>═══ Minecraft Proxy Network ═══</rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: <green>%ping%ms</green></gray>",
+]
+
+# Animated footer frames
+footers = [
+    "<gray>Players Online: <green>%players_online%</green>/<dark_gray>%max_players_online%</dark_gray></gray>\n<gold>store.example.com</gold>",
+    "<gray>Players on <aqua>%server%</aqua>: <yellow>%local_players_online%</yellow></gray>\n<aqua>discord.gg/example</aqua>",
+]
+
+# Tablist player entry formatting
+format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>%suffix%"
+
+# Custom replacements for placeholders (e.g. pretty server badges)
+[groups.placeholder_replacements]
+"%server%" = { "smp" = "<green>SMP</green>", "lobby" = "<aqua>Lobby</aqua>", "survival" = "<gold>Survival</gold>", "limbo" = "<gray>Limbo</gray>" }
