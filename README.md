@@ -126,8 +126,10 @@ format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>
 | Command | Permission | Description |
 | :--- | :--- | :--- |
 | `/bettertab reload` | `bettertab.reload` *(or `bettertab.admin`)* | Hot-reload `config/bettertab.toml` and refresh all viewers |
-| `/bettertab name <name>` | `bettertab.name` *(color tags require `bettertab.name.color`)* | Set a custom personal TAB display name |
-| `/bettertab reset` | `bettertab.reset` *(or `bettertab.name`)* | Reset custom TAB display name back to username |
+| `/nick <name>` / `/nickname <name>` | `bettertab.name` *(color tags require `bettertab.name.color`)* | Set a network nickname shown in the tab list and in chat on every server |
+| `/nick reset` / `/nickname reset` | Player | Remove the network nickname and show the real username again |
+| `/bettertab name <name>` | `bettertab.name` *(color tags require `bettertab.name.color`)* | Alias for `/nick <name>` |
+| `/bettertab reset` | `bettertab.reset` *(or `bettertab.name`)* | Alias for `/nick reset` |
 | `/bettertab toggle` | All | Toggle custom TAB formatting on/off |
 | `/bettertab info` | All | Show active server, group, role, and ping |
 

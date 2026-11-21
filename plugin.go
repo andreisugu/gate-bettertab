@@ -53,7 +53,7 @@ var Plugin = proxy.Plugin{
 				Executes(command.Command(func(cmdCtx *command.Context) error {
 					return cmdCtx.Source.SendMessage(&c.Text{
 						Content: "§b[BetterTab for Gate] §7by Andrei\n" +
-							"§7Commands: §f/" + name + " reload§7, §f/" + name + " name <name>§7, §f/" + name + " reset§7, §f/" + name + " toggle§7, §f/" + name + " info",
+							"§7Commands: §f/nick <name>§7, §f/nick reset§7, §f/" + name + " reload§7, §f/" + name + " toggle§7, §f/" + name + " info",
 					})
 				})).
 				Then(brigodier.Literal("reload").
@@ -136,17 +136,13 @@ var Plugin = proxy.Plugin{
 								return cmdCtx.Source.SendMessage(&c.Text{Content: "§cOnly players can set their TAB name."})
 							}
 							newName := cmdCtx.String("new_name")
-							if strings.TrimSpace(newName) == "" {
-								return cmdCtx.Source.SendMessage(&c.Text{Content: "§cName cannot be empty."})
+							value, err := setNickname(p, player, newName)
+							if err != nil {
+								return cmdCtx.Source.SendMessage(&c.Text{Content: "§c[Nick] " + err.Error() + "."})
 							}
-							if (strings.Contains(newName, "&") || strings.Contains(newName, "§") || strings.Contains(newName, "<")) &&
-								!player.HasPermission("bettertab.name.color") && !player.HasPermission("bettertab.admin") && !player.HasPermission("*") {
-								return cmdCtx.Source.SendMessage(&c.Text{Content: "§cYou do not have permission to use color or formatting tags in your TAB name (bettertab.name.color)."})
-							}
-							states.SetCustomName(player.ID(), newName)
 							tabMgr.UpdateAll()
 							return cmdCtx.Source.SendMessage(&c.Text{
-								Content: fmt.Sprintf("§a[BetterTab] Your TAB display name is now: §f%s", newName),
+								Content: fmt.Sprintf("§a[Nick] Your network nickname is now §f%s§a.", value),
 							})
 						})),
 					),
@@ -155,6 +151,8 @@ var Plugin = proxy.Plugin{
 
 		p.Command().Register(buildCommand("bettertab"))
 		p.Command().Register(buildCommand("btab"))
+		p.Command().Register(nickCommand("nick", p))
+		p.Command().Register(nickCommand("nickname", p))
 		p.Command().Register(
 			brigodier.Literal("gatetab").
 				Executes(command.Command(func(cmdCtx *command.Context) error {
