@@ -170,7 +170,10 @@ func (tm *TabManager) UpdateAll() {
 
 			_ = entry.SetListed(true)
 
-			targetCustomName, _ := tm.states.GetCustomName(target.ID())
+			targetCustomName := NicknameFor(guuid.UUID(target.ID()))
+			if targetCustomName == "" {
+				targetCustomName, _ = tm.states.GetCustomName(target.ID())
+			}
 			targetRole, targetRoleName := tm.ResolvePlayerRole(target, targetServer)
 
 			targetCtx := &PlaceholderContext{
