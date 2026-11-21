@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	spmanager "github.com/andreisugu/gate-stonyperms/manager"
 )
 
 func TestConfigStoreLoadAndMatch(t *testing.T) {
@@ -64,5 +66,82 @@ format = "<white>%username%</white>"
 	role := store.GetRoleForPlayer("steve")
 	if role.Weight != 100 {
 		t.Errorf("Expected role weight 100 for steve, got %d", role.Weight)
+	}
+}
+
+func TestResolveRoleForUserStonyPerms(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "bettertab.toml")
+
+	testTOML := `
+[roles.admin]
+prefix = "&c[AdminCfg] "
+weight = 500
+
+[roles.vip]
+prefix = "&a[VIPCfg] "
+weight = 100
+
+[roles.default]
+prefix = "&7"
+suffix = ""
+weight = 0
+
+[player_roles]
+pinned = "admin"
+`
+	if err := os.WriteFile(configPath, []byte(testTOML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	store := NewConfigStore(configPath)
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	effVip := &spmanager.EffectiveUser{
+		PrimaryGroup: "vip",
+		Prefix:       "&a[VIP] ",
+		Groups:       []spmanager.EffectiveGroup{{Name: "vip", Weight: 100}},
+	}
+	role, roleName := store.ResolveRoleForUser("Pinned", effVip)
+	if roleName != "admin" || role.Prefix != "&c[AdminCfg] " || role.Weight != 500 {
+		t.Fatalf("expected player_roles override admin, got name=%q role=%+v", roleName, role)
+	}
+
+	effChaonius := &spmanager.EffectiveUser{
+		PrimaryGroup: "chaonius",
+		Prefix:       "&5[Chaonius] ",
+		Suffix:       " &d*",
+		Groups: []spmanager.EffectiveGroup{
+			{Name: "chaonius", Weight: 130},
+			{Name: "default", Weight: 0},
+		},
+	}
+	role, roleName = store.ResolveRoleForUser("DynamicUser", effChaonius)
+	if roleName != "chaonius" || role.Prefix != "&5[Chaonius] " || role.Suffix != " &d*" || role.Weight != 130 {
+		t.Fatalf("unexpected resolved chaonius role: name=%q role=%+v", roleName, role)
+	}
+
+	effEmptyPrefix := &spmanager.EffectiveUser{
+		PrimaryGroup: "vip",
+		Prefix:       "",
+		Groups:       []spmanager.EffectiveGroup{{Name: "vip", Weight: 0}},
+	}
+	role, roleName = store.ResolveRoleForUser("FallbackVip", effEmptyPrefix)
+	if roleName != "vip" || role.Prefix != "&a[VIPCfg] " || role.Weight != 100 {
+		t.Fatalf("expected config fallback for vip, got name=%q role=%+v", roleName, role)
+	}
+
+	effInherited := &spmanager.EffectiveUser{
+		PrimaryGroup: "default",
+		Prefix:       "&a[VIP] ",
+		Groups: []spmanager.EffectiveGroup{
+			{Name: "vip", Weight: 100},
+			{Name: "default", Weight: 0},
+		},
+	}
+	role, roleName = store.ResolveRoleForUser("InheritedUser", effInherited)
+	if roleName != "vip" || role.Prefix != "&a[VIP] " || role.Weight != 100 {
+		t.Fatalf("expected highest inherited vip, got name=%q role=%+v", roleName, role)
 	}
 }

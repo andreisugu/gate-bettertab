@@ -3,7 +3,9 @@ module github.com/andreisugu/gate-bettertab
 go 1.26
 
 require (
+	github.com/andreisugu/gate-stonyperms v0.0.0-20261121151256-d22cf98b9a6c
 	github.com/go-logr/logr v1.4.4
+	github.com/google/uuid v1.6.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/robinbraemer/event v0.1.1
 	go.minekube.com/brigodier v0.0.2
@@ -26,7 +28,6 @@ require (
 	github.com/gammazero/deque v1.2.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/jellydator/ttlcache/v3 v3.4.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect

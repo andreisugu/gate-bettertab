@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	spmanager "github.com/andreisugu/gate-stonyperms/manager"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -281,6 +282,96 @@ func (cs *ConfigStore) GetRoleWithInfo(username string) (Role, string) {
 	}
 
 	return Role{Weight: 0}, "default"
+}
+
+// ResolveRoleForUser resolves a player's Role and role name from BetterTab config
+// and an optional live StonyPerms EffectiveUser snapshot.
+func (cs *ConfigStore) ResolveRoleForUser(username string, user *spmanager.EffectiveUser) (Role, string) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	cleanUser := strings.ToLower(strings.TrimSpace(username))
+	if cs.cfg != nil && cleanUser != "" {
+		if roleName, ok := cs.cfg.PlayerRoles[cleanUser]; ok {
+			if role, found := cs.findRoleLocked(roleName); found {
+				return role, roleName
+			}
+		}
+	}
+
+	if user != nil {
+		roleName := strings.ToLower(strings.TrimSpace(user.PrimaryGroup))
+		spWeight := 0
+		foundPrimaryWeight := false
+		for _, g := range user.Groups {
+			if strings.EqualFold(g.Name, roleName) {
+				spWeight = g.Weight
+				foundPrimaryWeight = true
+				break
+			}
+		}
+		if (roleName == "" || roleName == "default") && len(user.Groups) > 0 {
+			roleName = strings.ToLower(strings.TrimSpace(user.Groups[0].Name))
+			spWeight = user.Groups[0].Weight
+			foundPrimaryWeight = true
+		}
+		if roleName == "" {
+			roleName = "default"
+		}
+
+		cfgRole, inCfg := cs.findRoleLocked(roleName)
+		role := Role{Weight: spWeight}
+		if (!foundPrimaryWeight || spWeight == 0) && inCfg && cfgRole.Weight != 0 {
+			role.Weight = cfgRole.Weight
+		}
+
+		switch {
+		case user.Prefix != "":
+			role.Prefix = user.Prefix
+		case inCfg && cfgRole.Prefix != "":
+			role.Prefix = cfgRole.Prefix
+		default:
+			if defRole, ok := cs.findRoleLocked("default"); ok {
+				role.Prefix = defRole.Prefix
+			}
+		}
+
+		switch {
+		case user.Suffix != "":
+			role.Suffix = user.Suffix
+		case inCfg && cfgRole.Suffix != "":
+			role.Suffix = cfgRole.Suffix
+		default:
+			if defRole, ok := cs.findRoleLocked("default"); ok && roleName == "default" {
+				role.Suffix = defRole.Suffix
+			}
+		}
+		return role, roleName
+	}
+
+	if cs.cfg != nil {
+		if defaultRole, found := cs.findRoleLocked("default"); found {
+			return defaultRole, "default"
+		}
+	}
+
+	return Role{Weight: 0}, "default"
+}
+
+func (cs *ConfigStore) findRoleLocked(name string) (Role, bool) {
+	if cs.cfg == nil || len(cs.cfg.Roles) == 0 {
+		return Role{}, false
+	}
+	if role, ok := cs.cfg.Roles[name]; ok {
+		return role, true
+	}
+	clean := strings.ToLower(strings.TrimSpace(name))
+	for k, v := range cs.cfg.Roles {
+		if strings.EqualFold(k, clean) {
+			return v, true
+		}
+	}
+	return Role{}, false
 }
 
 // GetConfig returns the current Config snapshot.

@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	guuid "github.com/google/uuid"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
 	"go.minekube.com/gate/pkg/util/uuid"
+
+	stonyperms "github.com/andreisugu/gate-stonyperms"
 )
 
 // TabManager manages the live state, animation ticks, and tablist synchronization for all players.
@@ -18,6 +21,7 @@ type TabManager struct {
 	states    *PlayerStateManager
 	log       logr.Logger
 	animFrame atomic.Uint64
+	eventsSub atomic.Bool
 }
 
 // NewTabManager creates a new TabManager instance.
@@ -32,8 +36,10 @@ func NewTabManager(p *proxy.Proxy, store *ConfigStore, states *PlayerStateManage
 
 // Start begins the background update loop.
 func (tm *TabManager) Start(ctx context.Context) {
+	tm.ensureStonyPermsSubscribed(ctx)
 	go func() {
 		for {
+			tm.ensureStonyPermsSubscribed(ctx)
 			interval := 1000 * time.Millisecond
 			if cfg := tm.store.GetConfig(); cfg != nil && cfg.UpdateIntervalMs > 0 {
 				interval = time.Duration(cfg.UpdateIntervalMs) * time.Millisecond
@@ -107,7 +113,7 @@ func (tm *TabManager) UpdateAll() {
 		}
 
 		viewerCustomName, _ := tm.states.GetCustomName(viewer.ID())
-		viewerRole, viewerRoleName := tm.store.GetRoleWithInfo(viewer.Username())
+		viewerRole, viewerRoleName := tm.ResolvePlayerRole(viewer, viewerServer)
 
 		viewerCtx := &PlaceholderContext{
 			Player:           viewer,
@@ -165,7 +171,7 @@ func (tm *TabManager) UpdateAll() {
 			_ = entry.SetListed(true)
 
 			targetCustomName, _ := tm.states.GetCustomName(target.ID())
-			targetRole, targetRoleName := tm.store.GetRoleWithInfo(target.Username())
+			targetRole, targetRoleName := tm.ResolvePlayerRole(target, targetServer)
 
 			targetCtx := &PlaceholderContext{
 				Player:           target,
@@ -207,4 +213,62 @@ func (tm *TabManager) HandleServerSwitch(player proxy.Player, targetServer strin
 func (tm *TabManager) HandlePlayerDisconnect(player proxy.Player) {
 	tm.states.RemovePlayer(player.ID())
 	tm.UpdateAll()
+}
+
+// ResolvePlayerRole resolves a player's Role and role name dynamically via StonyPerms
+// when loaded, falling back to static BetterTab configuration.
+func (tm *TabManager) ResolvePlayerRole(p proxy.Player, serverName string) (Role, string) {
+	if p == nil {
+		return Role{Weight: 0}, "default"
+	}
+	if mgr := stonyperms.GetManager(); mgr != nil {
+		var contexts map[string]string
+		cleanServer := strings.ToLower(strings.TrimSpace(serverName))
+		if cleanServer != "" && cleanServer != "connecting" && cleanServer != "none" && cleanServer != "unknown" {
+			contexts = map[string]string{"server": cleanServer}
+		}
+		eff, _, _ := mgr.EffectiveUser(guuid.UUID(p.ID()), contexts, "default")
+		return tm.store.ResolveRoleForUser(p.Username(), eff)
+	}
+	return tm.store.GetRoleWithInfo(p.Username())
+}
+
+func (tm *TabManager) ensureStonyPermsSubscribed(ctx context.Context) {
+	if tm.eventsSub.Load() {
+		return
+	}
+	mgr := stonyperms.GetManager()
+	if mgr == nil {
+		return
+	}
+	if !tm.eventsSub.CompareAndSwap(false, true) {
+		return
+	}
+	ch, unsub := mgr.SubscribeEvents(32)
+	go func() {
+		defer unsub()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+			drain:
+				for {
+					select {
+					case _, more := <-ch:
+						if !more {
+							tm.UpdateAll()
+							return
+						}
+					default:
+						break drain
+					}
+				}
+				tm.UpdateAll()
+			}
+		}
+	}()
 }
