@@ -116,11 +116,12 @@ var Plugin = proxy.Plugin{
 						if group != nil {
 							gName = group.Name
 						}
-						_, rName := store.GetRoleWithInfo(player.Username())
+						role, rName := tabMgr.ResolvePlayerRole(player, sName)
+						prefixPreview := strings.ReplaceAll(role.Prefix, "&", "§")
 
 						return cmdCtx.Source.SendMessage(&c.Text{
-							Content: fmt.Sprintf("§b[BetterTab Info]\n§7Server: §f%s\n§7Group: §f%s\n§7Role: §f%s\n§7Ping: §f%dms",
-								sName, gName, rName, player.Ping().Milliseconds()),
+							Content: fmt.Sprintf("§b[BetterTab Info]\n§7Server: §f%s\n§7Group: §f%s\n§7Role: §f%s\n§7Prefix: §r%s\n§7Ping: §f%dms",
+								sName, gName, rName, prefixPreview, player.Ping().Milliseconds()),
 						})
 					})),
 				).
