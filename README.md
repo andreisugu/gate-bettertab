@@ -165,7 +165,7 @@ format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>
 
 | Project | Role | Stack |
 | :--- | :--- | :--- |
-| [`gate-stonyperms`](https://github.com/andreisugu/gate-stonyperms) | LuckPerms-style permissions, contexts, tracks & v0.2 R/W HTTP + SSE API | `Go 1.26` |
+| [`gate-stonyperms`](https://github.com/andreisugu/gate-stonyperms) | Context-aware permissions, tracks, Web UI & v0.2 R/W HTTP + SSE API | `Go 1.26` |
 | [`stonyperms-bridge`](https://github.com/andreisugu/stonyperms-bridge) | Paper & Fabric permission adapters, live SSE, `/spb` commands, Vault & PAPI | `Java 25` |
 | **[`gate-bettertab`](https://github.com/andreisugu/gate-bettertab)** *(this repo)* | Animated RGB / MiniMessage TAB lists, server groups, weights & placeholders | `Go 1.26` |
 | [`gate-discord4gate`](https://github.com/andreisugu/gate-discord4gate) | Bidirectional Discord <> Minecraft chat, slash commands & webhook avatars | `Go 1.26` |
