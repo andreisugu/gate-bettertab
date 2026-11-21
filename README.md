@@ -2,10 +2,11 @@
 
 # 🌈 Gate BetterTab
 
-**Cross-server TAB list, MiniMessage/RGB stack parser, role-priority sorting, network `/nick` & dynamic placeholders for Minekube Gate.**
+**Cross-server TAB list, MiniMessage/RGB stack parser, Minecraft 1.21.2+ / 26.3 priority sorting, network `/nick` & live StonyPerms role integration for Minekube Gate.**
 
 <p>
   <a href="https://github.com/andreisugu/gate-bettertab/actions/workflows/ci.yml"><img src="https://github.com/andreisugu/gate-bettertab/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/andreisugu/gate-bettertab/releases"><img src="https://img.shields.io/github/v/release/andreisugu/gate-bettertab?style=flat-square&label=Release" alt="Latest Release" /></a>
   <a href="https://pkg.go.dev/github.com/andreisugu/gate-bettertab"><img src="https://pkg.go.dev/badge/github.com/andreisugu/gate-bettertab.svg" alt="Go Reference" /></a>
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.26" />
   <a href="https://github.com/minekube/gate"><img src="https://img.shields.io/badge/Platform-Minekube_Gate-7c3aed?style=flat-square" alt="Minekube Gate" /></a>
@@ -15,6 +16,7 @@
 <p>
   <a href="#-features">Features</a> •
   <a href="#-installation">Installation</a> •
+  <a href="#-stonyperms-integration--sorting">StonyPerms & Sorting</a> •
   <a href="#-configuration">Configuration</a> •
   <a href="#-commands--permissions">Commands</a> •
   <a href="#-placeholders">Placeholders</a> •
@@ -29,10 +31,10 @@
 
 - **Cross-Server Global Tab List:** Automatically mirrors players across all connected backends (with real skin profiles, head layers, ping buckets, and clean removal on disconnect or server-isolated groups), synced immediately on server switch, disconnect, and StonyPerms updates.
 - **True Minecraft 1.21.2+ / 26.3 Priority Sorting:** Evaluates multi-key `sorting_placeholders` (`%role_weight%`, `%username_lower%`, `-` / `+` / `desc:` / `asc:` modifiers) and emits positive descending `ListOrder` values so higher weights and alphabetical nicknames stay in exact order.
-- **Zero-Spam Per-Viewer Diff Cache & Clean Toggle:** Only emits header/footer/entry update packets when values actually change, and cleanly restores vanilla tab entries/headers when toggled off.
-- **Stack-Accurate MiniMessage, RGB & Bungee Hex Parser:** Preserves nested style and color stacks (`<gold><b>CHAONIUS</b> Network</gold>`), bold/italic inside `<rainbow>` & phase-animated `<gradient>`, `<click>` / `<hover:show_text:...>` tags, `&#RRGGBB`, and `&x&R&R&G&G&B&B` legacy codes.
-- **StonyPerms + Standalone Network `/nick`:** Dynamic role prefixes/suffixes/weights/display names from `gate-stonyperms` (`EffectiveUser`), unified `/nick` & `/bettertab` storage with standalone fallback when StonyPerms isn't present, and staff `/nick whois` + `/bettertab nick`.
-- **Live Hot-Reload (`BETTERTAB_CONFIG`):** Update `config/bettertab.toml` (or `BETTERTAB_CONFIG`) via `/bettertab reload`.
+- **Zero-Spam Per-Viewer Diff Cache & Clean Toggle:** Only emits header/footer/entry update packets when rendered values change, and cleanly restores vanilla tab entries and headers when toggled off via `/bettertab toggle`.
+- **Stack-Accurate MiniMessage, RGB & Bungee Hex Parser:** Preserves nested style and color stacks (`<gold><b>NETWORK</b> Proxy</gold>`), bold/italic inside `<rainbow>` & phase-animated `<gradient>`, `<click>` / `<hover:show_text:...>` tags, `&#RRGGBB`, and `&x&R&R&G&G&B&B` legacy codes.
+- **Live `gate-stonyperms` (`v0.3.0`) + Standalone Role Integration:** Dynamically resolves prefixes, suffixes, weights, display names, and `%meta_<key>%` from StonyPerms `EffectiveUser` snapshots (with contextual `server=<name>` evaluation), alongside unified `/nick` & `/bettertab` storage and automatic `[roles]` fallback when StonyPerms is not installed.
+- **Live Hot-Reload (`BETTERTAB_CONFIG`):** Reload `config/bettertab.toml` (or custom `BETTERTAB_CONFIG`) on the fly via `/bettertab reload`.
 
 ---
 
@@ -46,7 +48,7 @@ github.com/andreisugu/gate-bettertab
 
 ### In Go Code
 ```bash
-go get github.com/andreisugu/gate-bettertab
+go get github.com/andreisugu/gate-bettertab@v0.2.0
 ```
 
 ```go
@@ -66,6 +68,14 @@ func main() {
 
 ---
 
+## 🔗 StonyPerms Integration & Sorting
+
+- **Dynamic StonyPerms Role Sync:** When `gate-stonyperms` (`v0.3.0+`) is loaded in the proxy, BetterTab subscribes to StonyPerms updates and resolves `%prefix%`, `%suffix%`, `%role%`, `%role_display_name%`, `%role_weight%`, `%weight%`, `%meta_<key>%`, and network nicknames cleanly against live SQL/JSON storage without proxy restarts. If StonyPerms is absent, BetterTab falls back transparently to `[roles]` and `[player_roles]`.
+- **Server Group Matching:** Each `[[groups]]` block matches connected backend names via exact names (`"lobby"`), catch-all wildcard (`"*"`), globs (`"lobby_*"`), or regex patterns (`"r=^smp-[0-9]+$"`).
+- **Sorting Modifiers:** `sorting_placeholders` evaluates keys top-to-bottom. Prefix keys with `-` / `desc:` for descending order or `+` / `asc:` for ascending order (numeric fields such as `%role_weight%` default descending unless overridden; string fields such as `%username_lower%` sort alphabetically).
+
+---
+
 ## ⚙️ Configuration
 
 Generated at `config/bettertab.toml` (override via `BETTERTAB_CONFIG`):
@@ -77,16 +87,25 @@ default_group = "default"
 
 [roles.owner]
 prefix = "<dark_red>[Owner] </dark_red>"
+suffix = ""
 display_name = "Owner"
 weight = 1000
 
 [roles.admin]
 prefix = "<red>[Admin] </red>"
+suffix = ""
 display_name = "Admin"
 weight = 500
 
+[roles.mod]
+prefix = "<gold>[Mod] </gold>"
+suffix = ""
+display_name = "Mod"
+weight = 250
+
 [roles.vip]
 prefix = "<green>[VIP] </green>"
+suffix = ""
 display_name = "VIP"
 weight = 100
 
@@ -101,13 +120,15 @@ weight = 0
 
 [[groups]]
 name = "default"
-servers = ["*"] # Supports exact names, globs ("lobby_*"), or regexes ("r=^smp-[0-9]+$")
+servers = ["*"] # Supports exact names, "*" wildcard, globs ("lobby_*"), or regexes ("r=^smp-[0-9]+$")
 only_list_players_in_same_server = false
 sorting_placeholders = ["%role_weight%", "%username_lower%"]
 
 headers = [
     "<rainbow:!0><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
-    "<rainbow:!2><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
+    "<rainbow:!2><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
+    "<rainbow:!4><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
+    "<rainbow:!6><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
 ]
 
 footers = [
@@ -165,9 +186,9 @@ format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>
 
 | Project | Role | Stack |
 | :--- | :--- | :--- |
-| [`gate-stonyperms`](https://github.com/andreisugu/gate-stonyperms) | Context-aware permissions, tracks, Web UI & v0.2 R/W HTTP + SSE API | `Go 1.26` |
-| [`stonyperms-bridge`](https://github.com/andreisugu/stonyperms-bridge) | Paper & Fabric permission adapters, live SSE, `/spb` commands, Vault & PAPI | `Java 25` |
-| **[`gate-bettertab`](https://github.com/andreisugu/gate-bettertab)** *(this repo)* | Animated RGB / MiniMessage TAB lists, server groups, weights & placeholders | `Go 1.26` |
+| [`gate-stonyperms`](https://github.com/andreisugu/gate-stonyperms) | Context-aware permissions, SQL/JSON storage, Web UI & v0.2 HTTP + SSE API | `Go 1.26` |
+| [`stonyperms-bridge`](https://github.com/andreisugu/stonyperms-bridge) | Paper & Fabric standalone/bridge permissions, SQL/JSON, `/spb` & `/sp`, Vault & PAPI | `Java 25` |
+| **[`gate-bettertab`](https://github.com/andreisugu/gate-bettertab)** *(this repo)* | Animated RGB / MiniMessage TAB lists, 1.21.2+ sorting, `/nick` & StonyPerms roles | `Go 1.26` |
 | [`gate-discord4gate`](https://github.com/andreisugu/gate-discord4gate) | Bidirectional Discord <> Minecraft chat, slash commands & webhook avatars | `Go 1.26` |
 | [`gate-hybridforwarding`](https://github.com/andreisugu/gate-hybridforwarding) | Per-backend Velocity Modern, Legacy BungeeCord, BungeeGuard & None forwarding | `Go 1.26` |
 | [`gate-simplewhitelist`](https://github.com/andreisugu/gate-simplewhitelist) | Lock-free `atomic.Pointer` whitelist by username, UUID, IP & CIDR | `Go 1.26` |
