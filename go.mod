@@ -3,7 +3,7 @@ module github.com/andreisugu/gate-bettertab
 go 1.26.9
 
 require (
-	github.com/andreisugu/gate-stonyperms v0.0.0-20261121202516-685afa303652
+	github.com/andreisugu/gate-stonyperms v0.0.0-20261121222413-01a84d62060c
 	github.com/go-logr/logr v1.4.4
 	github.com/google/uuid v1.6.0
 	github.com/pelletier/go-toml/v2 v2.2.4
