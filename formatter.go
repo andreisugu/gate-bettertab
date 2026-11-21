@@ -14,7 +14,7 @@ import (
 var (
 	// Rainbow tag supporting <rainbow>, <rainbow:10>, <rainbow:!2>, <rainbow:!>, <rainbow:reversed:5>
 	rainbowTagRegex = regexp.MustCompile(`(?i)<rainbow(?::(!)?(?:reversed)?:?([0-9.-]+)?)?>(.*?)</rainbow(?::[^>]*)?>`)
-	
+
 	// MineDown inline rainbow: &rainbow&Text or &rainbow:20&Text
 	mineDownRainbowRegex = regexp.MustCompile(`(?i)&rainbow(?::([0-9.-]+))?&(.*?)(?:&r|&reset|&rainbow&|$)`)
 

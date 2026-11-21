@@ -97,15 +97,15 @@ type Role struct {
 
 // Group represents a server group tablist definition.
 type Group struct {
-	Name                         string                       `toml:"name"`
-	Servers                      []string                     `toml:"servers"`
-	Headers                      []string                     `toml:"headers"`
-	Footers                      []string                     `toml:"footers"`
-	Format                       string                       `toml:"format"`
-	OnlyListPlayersInSameServer  bool                         `toml:"only_list_players_in_same_server"`
-	SortingPlaceholders          []string                     `toml:"sorting_placeholders"`
-	PlaceholderReplacements      map[string]map[string]string `toml:"placeholder_replacements"`
-	serverRegexes                []*regexp.Regexp
+	Name                        string                       `toml:"name"`
+	Servers                     []string                     `toml:"servers"`
+	Headers                     []string                     `toml:"headers"`
+	Footers                     []string                     `toml:"footers"`
+	Format                      string                       `toml:"format"`
+	OnlyListPlayersInSameServer bool                         `toml:"only_list_players_in_same_server"`
+	SortingPlaceholders         []string                     `toml:"sorting_placeholders"`
+	PlaceholderReplacements     map[string]map[string]string `toml:"placeholder_replacements"`
+	serverRegexes               []*regexp.Regexp
 }
 
 // MatchesServer checks if a server matches any of the group's server patterns.
