@@ -2,7 +2,7 @@
 
 # 🌈 Gate BetterTab
 
-**Animated RGB / MiniMessage TAB lists, per-server groups, role sorting & dynamic placeholders for Minekube Gate.**
+**Cross-server TAB list, MiniMessage/RGB stack parser, role-priority sorting, network `/nick` & dynamic placeholders for Minekube Gate.**
 
 <p>
   <a href="https://github.com/andreisugu/gate-bettertab/actions/workflows/ci.yml"><img src="https://github.com/andreisugu/gate-bettertab/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -27,12 +27,12 @@
 
 ## ✨ Features
 
-- **Full RGB, MiniMessage & Legacy Formatting:** Supports `<rainbow>`, `<gradient:#from:#to>`, `<#RRGGBB>`, MiniMessage tags (`<gold>`, `<b>`, `<i>`), and classic `&a` / `&#RRGGBB` codes.
-- **Animated Headers & Footers:** Cycle multiple header/footer frames smoothly on `update_interval_ms`.
-- **Per-Server Group Profiles & Isolation:** Define distinct tab layouts per backend regex group and optionally show only players on the same backend (`only_list_players_in_same_server`).
-- **Role Priority Sorting:** Order entries by role weight, custom sorting placeholders, and username directly in the proxy tab list.
-- **Custom Nicknames & Player Toggle:** Players can personalize or toggle their custom tab display without backend plugins.
-- **Live Hot-Reload:** Update `config/bettertab.toml` and refresh every player's tab list instantly via `/bettertab reload`.
+- **Cross-Server Global Tab List:** Automatically mirrors players across all connected backends (with real skin profiles, head layers, ping buckets, and clean removal on disconnect or server-isolated groups), synced immediately on server switch, disconnect, and StonyPerms updates.
+- **True Minecraft 1.21.2+ / 26.3 Priority Sorting:** Evaluates multi-key `sorting_placeholders` (`%role_weight%`, `%username_lower%`, `-` / `+` / `desc:` / `asc:` modifiers) and emits positive descending `ListOrder` values so higher weights and alphabetical nicknames stay in exact order.
+- **Zero-Spam Per-Viewer Diff Cache & Clean Toggle:** Only emits header/footer/entry update packets when values actually change, and cleanly restores vanilla tab entries/headers when toggled off.
+- **Stack-Accurate MiniMessage, RGB & Bungee Hex Parser:** Preserves nested style and color stacks (`<gold><b>CHAONIUS</b> Network</gold>`), bold/italic inside `<rainbow>` & phase-animated `<gradient>`, `<click>` / `<hover:show_text:...>` tags, `&#RRGGBB`, and `&x&R&R&G&G&B&B` legacy codes.
+- **StonyPerms + Standalone Network `/nick`:** Dynamic role prefixes/suffixes/weights/display names from `gate-stonyperms` (`EffectiveUser`), unified `/nick` & `/bettertab` storage with standalone fallback when StonyPerms isn't present, and staff `/nick whois` + `/bettertab nick`.
+- **Live Hot-Reload (`BETTERTAB_CONFIG`):** Update `config/bettertab.toml` (or `BETTERTAB_CONFIG`) via `/bettertab reload`.
 
 ---
 
@@ -68,7 +68,7 @@ func main() {
 
 ## ⚙️ Configuration
 
-Generated at `config/bettertab.toml`:
+Generated at `config/bettertab.toml` (override via `BETTERTAB_CONFIG`):
 
 ```toml
 update_interval_ms = 1000
@@ -77,19 +77,23 @@ default_group = "default"
 
 [roles.owner]
 prefix = "<dark_red>[Owner] </dark_red>"
+display_name = "Owner"
 weight = 1000
 
 [roles.admin]
 prefix = "<red>[Admin] </red>"
+display_name = "Admin"
 weight = 500
 
 [roles.vip]
 prefix = "<green>[VIP] </green>"
+display_name = "VIP"
 weight = 100
 
 [roles.default]
 prefix = "<gray>"
 suffix = "</gray>"
+display_name = "Player"
 weight = 0
 
 [player_roles]
@@ -97,13 +101,13 @@ weight = 0
 
 [[groups]]
 name = "default"
-servers = ["*"]
+servers = ["*"] # Supports exact names, globs ("lobby_*"), or regexes ("r=^smp-[0-9]+$")
 only_list_players_in_same_server = false
 sorting_placeholders = ["%role_weight%", "%username_lower%"]
 
 headers = [
-    "<rainbow>═══ Minecraft Proxy Network ═══</rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
-    "<rainbow>═══ Minecraft Proxy Network ═══</rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: <green>%ping%ms</green></gray>",
+    "<rainbow:!0><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
+    "<rainbow:!2><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
 ]
 
 footers = [
@@ -121,17 +125,18 @@ format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>
 
 ## ⌨️ Commands & Permissions
 
-**Aliases:** `/bettertab`, `/btab` *(plus `/gatetab` quick help pointer)*
+**Aliases:** `/bettertab`, `/btab`, `/nick`, `/nickname` *(plus `/gatetab` quick help pointer)*
 
 | Command | Permission | Description |
 | :--- | :--- | :--- |
 | `/bettertab reload` | `bettertab.reload` *(or `bettertab.admin`)* | Hot-reload `config/bettertab.toml` and refresh all viewers |
-| `/nick <name>` / `/nickname <name>` | `bettertab.name` *(color tags require `bettertab.name.color`)* | Set a network nickname shown in the tab list and in chat on every server |
-| `/nick reset` / `/nickname reset` | Player | Remove the network nickname and show the real username again |
-| `/bettertab name <name>` | `bettertab.name` *(color tags require `bettertab.name.color`)* | Alias for `/nick <name>` |
-| `/bettertab reset` | `bettertab.reset` *(or `bettertab.name`)* | Alias for `/nick reset` |
-| `/bettertab toggle` | All | Toggle custom TAB formatting on/off |
-| `/bettertab info` | All | Show active server, group, role, and ping |
+| `/nick <name>` / `/nickname <name>` | `bettertab.name` *(color tags require `bettertab.name.color`)* | Set a network nickname shown in tab list and chat |
+| `/nick reset` / `/nickname reset` | Player | Remove your network nickname and show real username again |
+| `/nick whois <name>` / `/bettertab whois <name>` | `bettertab.whois` *(or `bettertab.admin`)* | Look up the real username behind a nickname or vice versa |
+| `/bettertab nick <player> <set <nick>\|reset>` | `bettertab.admin` | Set or reset another player's nickname |
+| `/bettertab name <name>` / `/bettertab reset` | `bettertab.name` / `bettertab.reset` | Aliases for `/nick <name>` and `/nick reset` |
+| `/bettertab toggle` | All | Toggle custom TAB formatting on/off cleanly |
+| `/bettertab info` | All | Show active server, group, role, nickname, rendered prefix & ping |
 
 ---
 
@@ -139,7 +144,9 @@ format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>
 
 | Placeholder | Description |
 | :--- | :--- |
-| `%username%` / `%username_lower%` | Player username (or custom TAB name) / lowercase |
+| `%username%` / `%username_lower%` | Active display name (nickname if set, else real username) / lowercase |
+| `%real_username%` / `%real_username_lower%` | Real Mojang/offline username / lowercase |
+| `%nick%` / `%nickname%` | Active nickname (or real username if none) |
 | `%server%` / `%raw_server%` | Backend name with / without `placeholder_replacements` |
 | `%server_group%` | Active tab server group name |
 | `%ping%` / `%ping_colored%` | Ping in ms (green `< 100ms`, yellow `< 200ms`, red `>= 200ms`) |
@@ -148,8 +155,9 @@ format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>
 | `%server_online_players_<srv>%` | Online players on specific backend `<srv>` |
 | `%group_players_online%` / `%group_players_online_<grp>%` | Online players in current / named group `<grp>` |
 | `%current_date%` / `%current_time%` | Current `YYYY-MM-DD` / `HH:mm:ss` *(plus `_day`, `_weekday`, `_month`, `_year`, `_hour`, `_minute`, `_second`)* |
-| `%prefix%` / `%suffix%` / `%role%` / `%role_display_name%` / `%role_weight%` | Configured role metadata & padded weight |
-| `%condition: A < B ? C : D%` | Conditional expression evaluation |
+| `%prefix%` / `%suffix%` / `%role%` / `%role_display_name%` / `%role_weight%` / `%weight%` | Resolved StonyPerms/config role metadata, padded weight & raw weight |
+| `%meta_<key>%` | StonyPerms resolved user/group metadata value for `<key>` |
+| `%condition: A <op> B ? C : D%` | Conditional expression evaluation (`==`, `!=`, `~=`, `contains`, `>=`, `<=`, `>`, `<`) |
 
 ---
 

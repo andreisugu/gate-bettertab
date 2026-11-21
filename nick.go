@@ -7,9 +7,9 @@ import (
 
 	guuid "github.com/google/uuid"
 	"go.minekube.com/brigodier"
-	c "go.minekube.com/common/minecraft/component"
 	"go.minekube.com/gate/pkg/command"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
+	"go.minekube.com/gate/pkg/util/uuid"
 
 	stonyperms "github.com/andreisugu/gate-stonyperms"
 )
@@ -41,17 +41,35 @@ var (
 	}
 )
 
-// NicknameFor returns the network nickname stored in StonyPerms user metadata.
+// NicknameFor returns the global network nickname stored in StonyPerms user metadata.
 func NicknameFor(id guuid.UUID) string {
+	return NicknameForWithContext(id, nil)
+}
+
+// NicknameForWithContext returns the network nickname stored in StonyPerms user metadata for a context.
+func NicknameForWithContext(id guuid.UUID, contexts map[string]string) string {
 	mgr := stonyperms.GetManager()
 	if mgr == nil {
 		return ""
 	}
-	eff, _, _ := mgr.EffectiveUser(id, nil, "default")
+	eff, _, _ := mgr.EffectiveUser(id, contexts, "default")
 	if eff == nil {
 		return ""
 	}
 	return strings.TrimSpace(eff.Meta[NicknameMetaKey])
+}
+
+// ResolveNickname returns the active nickname from StonyPerms or standalone PlayerStateManager.
+func ResolveNickname(id uuid.UUID, contexts map[string]string, states *PlayerStateManager) string {
+	if nick := NicknameForWithContext(guuid.UUID(id), contexts); nick != "" {
+		return nick
+	}
+	if states != nil {
+		if nick, ok := states.GetCustomName(id); ok {
+			return nick
+		}
+	}
+	return ""
 }
 
 func stripNickColors(value string) string {
@@ -104,35 +122,33 @@ func normalizeNickname(raw string, allowColor bool) (string, error) {
 	return normalizeColorCodes(value), nil
 }
 
-func nicknameConflict(p *proxy.Proxy, self proxy.Player, visible string) string {
-	mgr := stonyperms.GetManager()
-	if mgr == nil {
-		return "permissions are still loading, try again in a moment"
-	}
-
-	if other := mgr.GetUserByNameCopy(visible); other != nil && other.UUID != guuid.UUID(self.ID()) {
-		return "that name belongs to another player"
-	}
-
-	users, _, _ := mgr.ListUsers("", 0, 100000)
-	for _, other := range users {
-		if other.UUID == guuid.UUID(self.ID()) {
-			continue
+func nicknameConflict(p *proxy.Proxy, states *PlayerStateManager, selfID uuid.UUID, visible string) string {
+	if mgr := stonyperms.GetManager(); mgr != nil {
+		if other := mgr.GetUserByNameCopy(visible); other != nil && other.UUID != guuid.UUID(selfID) {
+			return "that name belongs to another player"
 		}
-		if strings.EqualFold(strings.TrimSpace(other.Meta[NicknameMetaKey]), visible) {
-			return "that nickname is already in use"
+		users, _, _ := mgr.ListUsers("", 0, 100000)
+		for _, other := range users {
+			if other.UUID == guuid.UUID(selfID) {
+				continue
+			}
+			otherVis := stripNickColors(strings.TrimSpace(other.Meta[NicknameMetaKey]))
+			if otherVis != "" && strings.EqualFold(otherVis, visible) {
+				return "that nickname is already in use"
+			}
 		}
 	}
 
 	if p != nil {
 		for _, other := range p.Players() {
-			if other.ID() == self.ID() {
+			if other.ID() == selfID {
 				continue
 			}
 			if strings.EqualFold(other.Username(), visible) {
 				return "that name belongs to another player"
 			}
-			if strings.EqualFold(NicknameFor(guuid.UUID(other.ID())), visible) {
+			otherNick := stripNickColors(ResolveNickname(other.ID(), nil, states))
+			if otherNick != "" && strings.EqualFold(otherNick, visible) {
 				return "that nickname is already in use"
 			}
 		}
@@ -140,60 +156,95 @@ func nicknameConflict(p *proxy.Proxy, self proxy.Player, visible string) string 
 	return ""
 }
 
-func setNickname(p *proxy.Proxy, player proxy.Player, raw string) (string, error) {
-	allowColor := player.HasPermission("bettertab.name.color") ||
-		player.HasPermission("bettertab.admin") ||
-		player.HasPermission("*")
-
+func setTargetNickname(
+	p *proxy.Proxy,
+	states *PlayerStateManager,
+	targetID uuid.UUID,
+	targetUsername string,
+	raw string,
+	allowColor bool,
+) (string, error) {
 	value, err := normalizeNickname(raw, allowColor)
 	if err != nil {
 		return "", err
 	}
-	if conflict := nicknameConflict(p, player, stripNickColors(value)); conflict != "" {
+	if conflict := nicknameConflict(p, states, targetID, stripNickColors(value)); conflict != "" {
 		return "", fmt.Errorf("%s", conflict)
 	}
 
-	mgr := stonyperms.GetManager()
-	if mgr == nil {
-		return "", fmt.Errorf("permissions are still loading, try again in a moment")
+	if mgr := stonyperms.GetManager(); mgr != nil {
+		mgr.GetOrCreateUser(guuid.UUID(targetID), targetUsername)
+		user := mgr.GetUserCopy(guuid.UUID(targetID))
+		if user == nil {
+			return "", fmt.Errorf("could not load the permission profile")
+		}
+		user.SetMeta(NicknameMetaKey, value)
+		if err := mgr.SaveUser(user); err != nil {
+			return "", fmt.Errorf("could not save the nickname: %v", err)
+		}
+		if states != nil {
+			states.ResetCustomName(targetID)
+		}
+		return value, nil
 	}
-	mgr.GetOrCreateUser(guuid.UUID(player.ID()), player.Username())
-	user := mgr.GetUserCopy(guuid.UUID(player.ID()))
-	if user == nil {
-		return "", fmt.Errorf("could not load your permission profile")
+
+	if states != nil {
+		states.SetCustomName(targetID, value)
+		return value, nil
 	}
-	user.SetMeta(NicknameMetaKey, value)
-	if err := mgr.SaveUser(user); err != nil {
-		return "", fmt.Errorf("could not save the nickname: %v", err)
-	}
-	return value, nil
+	return "", fmt.Errorf("nickname storage is not available right now")
 }
 
-func clearNickname(player proxy.Player) (bool, error) {
-	mgr := stonyperms.GetManager()
-	if mgr == nil {
-		return false, fmt.Errorf("permissions are still loading, try again in a moment")
+func clearTargetNickname(states *PlayerStateManager, targetID uuid.UUID) (bool, error) {
+	cleared := false
+	if mgr := stonyperms.GetManager(); mgr != nil {
+		user := mgr.GetUserCopy(guuid.UUID(targetID))
+		if user != nil && user.UnsetMeta(NicknameMetaKey) {
+			if err := mgr.SaveUser(user); err != nil {
+				return false, fmt.Errorf("could not clear the nickname: %v", err)
+			}
+			cleared = true
+		}
 	}
-	user := mgr.GetUserCopy(guuid.UUID(player.ID()))
-	if user == nil || !user.UnsetMeta(NicknameMetaKey) {
-		return false, nil
+	if states != nil && states.ResetCustomName(targetID) {
+		cleared = true
 	}
-	if err := mgr.SaveUser(user); err != nil {
-		return false, fmt.Errorf("could not save the nickname: %v", err)
-	}
-	return true, nil
+	return cleared, nil
 }
 
-func sendNickInfo(player proxy.Player) error {
-	current := NicknameFor(guuid.UUID(player.ID()))
+func sendNickInfo(player proxy.Player, states *PlayerStateManager) error {
+	current := ResolveNickname(player.ID(), nil, states)
 	if current == "" {
-		return player.SendMessage(&c.Text{
-			Content: "§b[Nick] §7No nickname set. Use §f/nick <name>§7.",
-		})
+		return player.SendMessage(FormatText("&b[Nick] &7No nickname set. Use &f/nick <name>&7."))
 	}
-	return player.SendMessage(&c.Text{
-		Content: fmt.Sprintf("§b[Nick] §7Current nickname: §f%s§7. Use §f/nick reset§7 to remove it.", current),
-	})
+	return player.SendMessage(FormatText(fmt.Sprintf("&b[Nick] &7Current nickname: &f%s&7. Use &f/nick reset&7 to remove it.", current)))
+}
+
+func resolveWhois(p *proxy.Proxy, states *PlayerStateManager, query string) (string, string, bool) {
+	clean := strings.TrimSpace(query)
+	if clean == "" {
+		return "", "", false
+	}
+	if p != nil {
+		for _, online := range p.Players() {
+			nick := ResolveNickname(online.ID(), nil, states)
+			if strings.EqualFold(online.Username(), clean) ||
+				(nick != "" && strings.EqualFold(stripNickColors(nick), clean)) {
+				return online.Username(), nick, true
+			}
+		}
+	}
+	if mgr := stonyperms.GetManager(); mgr != nil {
+		users, _, _ := mgr.ListUsers("", 0, 100000)
+		for _, u := range users {
+			nick := strings.TrimSpace(u.Meta[NicknameMetaKey])
+			if strings.EqualFold(u.Username, clean) ||
+				(nick != "" && strings.EqualFold(stripNickColors(nick), clean)) {
+				return u.Username, nick, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 func requireNickPermission(player proxy.Player) error {
@@ -205,47 +256,67 @@ func requireNickPermission(player proxy.Player) error {
 	return fmt.Errorf("you need the VIP rank or higher to set a nickname")
 }
 
-func nickCommand(name string, p *proxy.Proxy) brigodier.LiteralNodeBuilder {
+func canUseColorNick(src command.Source) bool {
+	return src.HasPermission("bettertab.name.color") ||
+		src.HasPermission("bettertab.admin") ||
+		src.HasPermission("*")
+}
+
+func nickCommand(name string, p *proxy.Proxy, states *PlayerStateManager, tabMgr *TabManager) brigodier.LiteralNodeBuilder {
 	apply := func(cmdCtx *command.Context) error {
 		player, ok := cmdCtx.Source.(proxy.Player)
 		if !ok {
-			return cmdCtx.Source.SendMessage(&c.Text{Content: "§cOnly players can set a nickname."})
+			return cmdCtx.Source.SendMessage(FormatText("&cOnly players can set their own nickname."))
 		}
 		if err := requireNickPermission(player); err != nil {
-			return cmdCtx.Source.SendMessage(&c.Text{Content: "§c[Nick] " + err.Error() + "."})
+			return cmdCtx.Source.SendMessage(FormatText("&c[Nick] " + err.Error() + "."))
 		}
-		value, err := setNickname(p, player, cmdCtx.String("nickname"))
+		value, err := setTargetNickname(p, states, player.ID(), player.Username(), cmdCtx.String("nickname"), canUseColorNick(player))
 		if err != nil {
-			return cmdCtx.Source.SendMessage(&c.Text{Content: "§c[Nick] " + err.Error() + "."})
+			return cmdCtx.Source.SendMessage(FormatText("&c[Nick] " + err.Error() + "."))
 		}
-		return cmdCtx.Source.SendMessage(&c.Text{
-			Content: fmt.Sprintf("§a[Nick] Your network nickname is now §f%s§a. It shows in chat and the tab list on every server.", value),
-		})
+		if tabMgr != nil {
+			tabMgr.UpdateAll()
+		}
+		return cmdCtx.Source.SendMessage(FormatText(fmt.Sprintf("&a[Nick] Your network nickname is now &f%s&a. It shows in chat and the tab list on every server.", value)))
 	}
 
 	reset := func(cmdCtx *command.Context) error {
 		player, ok := cmdCtx.Source.(proxy.Player)
 		if !ok {
-			return cmdCtx.Source.SendMessage(&c.Text{Content: "§cOnly players can reset a nickname."})
+			return cmdCtx.Source.SendMessage(FormatText("&cOnly players can reset their own nickname."))
 		}
-		cleared, err := clearNickname(player)
+		cleared, err := clearTargetNickname(states, player.ID())
 		if err != nil {
-			return cmdCtx.Source.SendMessage(&c.Text{Content: "§c[Nick] " + err.Error() + "."})
+			return cmdCtx.Source.SendMessage(FormatText("&c[Nick] " + err.Error() + "."))
 		}
 		if !cleared {
-			return cmdCtx.Source.SendMessage(&c.Text{Content: "§7[Nick] You do not have a nickname set."})
+			return cmdCtx.Source.SendMessage(FormatText("&7[Nick] You do not have a nickname set."))
 		}
-		return cmdCtx.Source.SendMessage(&c.Text{
-			Content: "§a[Nick] Nickname cleared. Your real username is shown again.",
-		})
+		if tabMgr != nil {
+			tabMgr.UpdateAll()
+		}
+		return cmdCtx.Source.SendMessage(FormatText("&a[Nick] Nickname cleared. Your real username is shown again."))
 	}
 
 	info := func(cmdCtx *command.Context) error {
 		player, ok := cmdCtx.Source.(proxy.Player)
 		if !ok {
-			return cmdCtx.Source.SendMessage(&c.Text{Content: "§b[Nick] §7Use §f/" + name + " <name>§7 in game."})
+			return cmdCtx.Source.SendMessage(FormatText("&b[Nick] &7Use &f/" + name + " <name>&7 in game."))
 		}
-		return sendNickInfo(player)
+		return sendNickInfo(player, states)
+	}
+
+	whois := func(cmdCtx *command.Context) error {
+		query := cmdCtx.String("query")
+		realName, nick, found := resolveWhois(p, states, query)
+		if !found {
+			return cmdCtx.Source.SendMessage(FormatText(fmt.Sprintf("&c[Nick] No player found matching &f%s&c.", query)))
+		}
+		if nick == "" {
+			return cmdCtx.Source.SendMessage(FormatText(fmt.Sprintf("&b[Nick] &f%s &7does not have a custom nickname.", realName)))
+		}
+		return cmdCtx.Source.SendMessage(FormatText(fmt.Sprintf("&b[Nick] &f%s &7has real username &f%s&7.", nick, realName)))
 	}
 
 	return brigodier.Literal(name).
@@ -253,6 +324,14 @@ func nickCommand(name string, p *proxy.Proxy) brigodier.LiteralNodeBuilder {
 		Then(brigodier.Literal("info").Executes(command.Command(info))).
 		Then(brigodier.Literal("reset").Executes(command.Command(reset))).
 		Then(brigodier.Literal("clear").Executes(command.Command(reset))).
+		Then(brigodier.Literal("whois").
+			Requires(command.Requires(func(c *command.RequiresContext) bool {
+				return c.Source.HasPermission("bettertab.whois") ||
+					c.Source.HasPermission("bettertab.admin") ||
+					c.Source.HasPermission("*")
+			})).
+			Then(brigodier.Argument("query", brigodier.String).
+				Executes(command.Command(whois)))).
 		Then(brigodier.Literal("set").
 			Then(brigodier.Argument("nickname", brigodier.String).
 				Executes(command.Command(apply)))).

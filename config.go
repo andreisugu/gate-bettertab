@@ -3,6 +3,7 @@ package bettertab
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -15,7 +16,7 @@ import (
 const defaultConfigTemplate = `# =============================================================================
 #                 Gate BetterTab Configuration
 # =============================================================================
-# High-performance, customizable tab list and player list formatting.
+# High-performance, customizable tab list and player list formatting for Gate.
 # =============================================================================
 
 # Main settings
@@ -26,31 +27,35 @@ default_group = "default"
 # -----------------------------------------------------------------------------
 # Player Roles & Prefixes / Suffixes
 # -----------------------------------------------------------------------------
-# Define role weights, prefixes, and suffixes.
-# Higher weight means higher priority in the TAB list sort order.
+# Higher weight means the role appears higher in the TAB list sort order.
 [roles.owner]
 prefix = "<dark_red>[Owner] </dark_red>"
 suffix = ""
+display_name = "Owner"
 weight = 1000
 
 [roles.admin]
 prefix = "<red>[Admin] </red>"
 suffix = ""
+display_name = "Admin"
 weight = 500
 
 [roles.mod]
 prefix = "<gold>[Mod] </gold>"
 suffix = ""
+display_name = "Mod"
 weight = 250
 
 [roles.vip]
 prefix = "<green>[VIP] </green>"
 suffix = ""
+display_name = "VIP"
 weight = 100
 
 [roles.default]
 prefix = "<gray>"
 suffix = "</gray>"
+display_name = "Player"
 weight = 0
 
 # Assign specific players to roles (lowercase username)
@@ -60,19 +65,22 @@ weight = 0
 # -----------------------------------------------------------------------------
 # Server Groups
 # -----------------------------------------------------------------------------
-# You can define multiple groups for different backend servers.
-# If multiple headers/footers are provided, they will cycle as an animation.
+# Define tab list formatting for specific backend server groups.
+# Server patterns support exact names, "*" wildcard, globs ("lobby_*"), or regexes ("r=^smp-[0-9]+$").
+# If multiple headers/footers are provided, they will cycle smoothly across ticks.
 
 [[groups]]
 name = "default"
-servers = ["*"] # Matches all servers by default
+servers = ["*"]
 only_list_players_in_same_server = false
 sorting_placeholders = ["%role_weight%", "%username_lower%"]
 
 # Animated header frames (cycles every update_interval_ms)
 headers = [
-    "<rainbow>═══ Andrei's Minecraft Network ═══</rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
-    "<rainbow>═══ Andrei's Minecraft Network ═══</rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: <green>%ping%ms</green></gray>",
+    "<rainbow:!0><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
+    "<rainbow:!2><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
+    "<rainbow:!4><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
+    "<rainbow:!6><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
 ]
 
 # Animated footer frames
@@ -81,19 +89,20 @@ footers = [
     "<gray>Players on <aqua>%server%</aqua>: <yellow>%local_players_online%</yellow></gray>\n<aqua>discord.gg/example</aqua>",
 ]
 
-# Player format in the TAB list
+# Tablist player entry formatting
 format = "<gray>[<aqua>%server%</aqua>]</gray> %prefix%<white>%username%</white>%suffix%"
 
 # Custom replacements for placeholders (e.g. pretty server badges)
 [groups.placeholder_replacements]
-"%server%" = { "smp" = "<green>SMP</green>", "lobby" = "<aqua>Lobby</aqua>", "nanolimbo" = "<gray>Limbo</gray>", "pumpkin" = "<gold>Pumpkin</gold>" }
+"%server%" = { "smp" = "<green>SMP</green>", "lobby" = "<aqua>Lobby</aqua>", "survival" = "<gold>Survival</gold>", "limbo" = "<gray>Limbo</gray>" }
 `
 
-// Role represents prefix, suffix, and sorting weight.
+// Role represents prefix, suffix, display name, and sorting weight.
 type Role struct {
-	Prefix string `toml:"prefix"`
-	Suffix string `toml:"suffix"`
-	Weight int    `toml:"weight"`
+	Prefix      string `toml:"prefix"`
+	Suffix      string `toml:"suffix"`
+	DisplayName string `toml:"display_name"`
+	Weight      int    `toml:"weight"`
 }
 
 // Group represents a server group tablist definition.
@@ -107,6 +116,7 @@ type Group struct {
 	SortingPlaceholders         []string                     `toml:"sorting_placeholders"`
 	PlaceholderReplacements     map[string]map[string]string `toml:"placeholder_replacements"`
 	serverRegexes               []*regexp.Regexp
+	serverGlobs                 []string
 }
 
 // MatchesServer checks if a server matches any of the group's server patterns.
@@ -116,7 +126,13 @@ func (g *Group) MatchesServer(serverName string) bool {
 	}
 	clean := strings.ToLower(strings.TrimSpace(serverName))
 	for _, s := range g.Servers {
-		if s == "*" || strings.EqualFold(s, clean) {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "*" || strings.EqualFold(trimmed, clean) {
+			return true
+		}
+	}
+	for _, glob := range g.serverGlobs {
+		if matched, err := path.Match(glob, clean); err == nil && matched {
 			return true
 		}
 	}
@@ -128,7 +144,7 @@ func (g *Group) MatchesServer(serverName string) bool {
 	return false
 }
 
-// Config represents the complete Velocitab configuration.
+// Config represents the complete BetterTab configuration.
 type Config struct {
 	UpdateIntervalMs int               `toml:"update_interval_ms"`
 	SortPlayers      bool              `toml:"sort_players"`
@@ -148,6 +164,11 @@ type ConfigStore struct {
 // NewConfigStore creates a new ConfigStore.
 func NewConfigStore(path string) *ConfigStore {
 	return &ConfigStore{path: path}
+}
+
+// Path returns the active config file path.
+func (cs *ConfigStore) Path() string {
+	return cs.path
 }
 
 // Load loads or creates the configuration file.
@@ -177,6 +198,8 @@ func (cs *ConfigStore) Load() (*Config, error) {
 
 	if cfg.UpdateIntervalMs <= 0 {
 		cfg.UpdateIntervalMs = 1000
+	} else if cfg.UpdateIntervalMs < 50 {
+		cfg.UpdateIntervalMs = 50
 	}
 	if cfg.DefaultGroup == "" {
 		cfg.DefaultGroup = "default"
@@ -195,12 +218,27 @@ func (cs *ConfigStore) Load() (*Config, error) {
 	}
 	cfg.PlayerRoles = normalizedPR
 
-	// Compile regexes for group servers
+	// Compile glob & regex server matchers
 	for i := range cfg.Groups {
 		g := &cfg.Groups[i]
 		g.serverRegexes = make([]*regexp.Regexp, 0, len(g.Servers))
-		for _, pattern := range g.Servers {
-			if strings.ContainsAny(pattern, "^$[]()+?{}.\\|") && pattern != "*" {
+		g.serverGlobs = make([]string, 0, len(g.Servers))
+		for _, rawPattern := range g.Servers {
+			pattern := strings.TrimSpace(rawPattern)
+			if pattern == "" || pattern == "*" {
+				continue
+			}
+			if expr, isExplicitRegex := cutPrefixFold(pattern, "r="); isExplicitRegex {
+				if r, err := regexp.Compile("(?i)" + expr); err == nil {
+					g.serverRegexes = append(g.serverRegexes, r)
+				}
+				continue
+			}
+			if !strings.ContainsAny(pattern, "^$[]()+{}\\|") && strings.ContainsAny(pattern, "*?") {
+				g.serverGlobs = append(g.serverGlobs, strings.ToLower(pattern))
+				continue
+			}
+			if strings.ContainsAny(pattern, "^$[]()+?{}.\\|") {
 				if r, err := regexp.Compile("(?i)" + pattern); err == nil {
 					g.serverRegexes = append(g.serverRegexes, r)
 				}
@@ -210,6 +248,13 @@ func (cs *ConfigStore) Load() (*Config, error) {
 
 	cs.cfg = &cfg
 	return &cfg, nil
+}
+
+func cutPrefixFold(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
+		return s[len(prefix):], true
+	}
+	return s, false
 }
 
 // GetGroupForServer finds the matching Group for a given server name.
@@ -223,7 +268,7 @@ func (cs *ConfigStore) GetGroupForServer(serverName string) *Group {
 
 	for i := range cs.cfg.Groups {
 		g := &cs.cfg.Groups[i]
-		if g.Name != cs.cfg.DefaultGroup && g.MatchesServer(serverName) {
+		if !strings.EqualFold(g.Name, cs.cfg.DefaultGroup) && g.MatchesServer(serverName) {
 			return g
 		}
 	}
@@ -240,25 +285,8 @@ func (cs *ConfigStore) GetGroupForServer(serverName string) *Group {
 
 // GetRoleForPlayer returns the role associated with a player name.
 func (cs *ConfigStore) GetRoleForPlayer(username string) Role {
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-
-	if cs.cfg == nil {
-		return Role{Weight: 0}
-	}
-
-	cleanUser := strings.ToLower(strings.TrimSpace(username))
-	if roleName, ok := cs.cfg.PlayerRoles[cleanUser]; ok {
-		if role, found := cs.cfg.Roles[roleName]; found {
-			return role
-		}
-	}
-
-	if defaultRole, found := cs.cfg.Roles["default"]; found {
-		return defaultRole
-	}
-
-	return Role{Weight: 0}
+	role, _ := cs.GetRoleWithInfo(username)
+	return role
 }
 
 // GetRoleWithInfo returns the role and its role key name.
@@ -272,12 +300,12 @@ func (cs *ConfigStore) GetRoleWithInfo(username string) (Role, string) {
 
 	cleanUser := strings.ToLower(strings.TrimSpace(username))
 	if roleName, ok := cs.cfg.PlayerRoles[cleanUser]; ok {
-		if role, found := cs.cfg.Roles[roleName]; found {
+		if role, found := cs.findRoleLocked(roleName); found {
 			return role, roleName
 		}
 	}
 
-	if defaultRole, found := cs.cfg.Roles["default"]; found {
+	if defaultRole, found := cs.findRoleLocked("default"); found {
 		return defaultRole, "default"
 	}
 
@@ -302,27 +330,36 @@ func (cs *ConfigStore) ResolveRoleForUser(username string, user *spmanager.Effec
 	if user != nil {
 		roleName := strings.ToLower(strings.TrimSpace(user.PrimaryGroup))
 		spWeight := 0
-		foundPrimaryWeight := false
+		spDisplayName := ""
+		foundPrimary := false
 		for _, g := range user.Groups {
 			if strings.EqualFold(g.Name, roleName) {
 				spWeight = g.Weight
-				foundPrimaryWeight = true
+				spDisplayName = strings.TrimSpace(g.DisplayName)
+				foundPrimary = true
 				break
 			}
 		}
 		if (roleName == "" || roleName == "default") && len(user.Groups) > 0 {
 			roleName = strings.ToLower(strings.TrimSpace(user.Groups[0].Name))
 			spWeight = user.Groups[0].Weight
-			foundPrimaryWeight = true
+			spDisplayName = strings.TrimSpace(user.Groups[0].DisplayName)
+			foundPrimary = true
 		}
 		if roleName == "" {
 			roleName = "default"
 		}
 
 		cfgRole, inCfg := cs.findRoleLocked(roleName)
-		role := Role{Weight: spWeight}
-		if (!foundPrimaryWeight || spWeight == 0) && inCfg && cfgRole.Weight != 0 {
+		role := Role{
+			Weight:      spWeight,
+			DisplayName: spDisplayName,
+		}
+		if (!foundPrimary || spWeight == 0) && inCfg && cfgRole.Weight != 0 {
 			role.Weight = cfgRole.Weight
+		}
+		if role.DisplayName == "" && inCfg && cfgRole.DisplayName != "" {
+			role.DisplayName = cfgRole.DisplayName
 		}
 
 		switch {

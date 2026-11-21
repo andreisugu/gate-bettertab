@@ -1,6 +1,10 @@
 package bettertab
 
-import "testing"
+import (
+	"testing"
+
+	"go.minekube.com/gate/pkg/util/uuid"
+)
 
 func TestNormalizeNickname(t *testing.T) {
 	tests := []struct {
@@ -38,5 +42,29 @@ func TestNormalizeNickname(t *testing.T) {
 				t.Fatalf("normalizeNickname(%q) = %q, want %q", test.input, got, test.want)
 			}
 		})
+	}
+}
+
+func TestStandaloneNicknameLifecycle(t *testing.T) {
+	states := NewPlayerStateManager()
+	id := uuid.New()
+
+	val, err := setTargetNickname(nil, states, id, "RealSteve", "&bCoolNick", true)
+	if err != nil {
+		t.Fatalf("setTargetNickname error: %v", err)
+	}
+	if val != "&bCoolNick" {
+		t.Fatalf("got %q, want &bCoolNick", val)
+	}
+	if got := ResolveNickname(id, nil, states); got != "&bCoolNick" {
+		t.Fatalf("ResolveNickname = %q, want &bCoolNick", got)
+	}
+
+	cleared, err := clearTargetNickname(states, id)
+	if err != nil || !cleared {
+		t.Fatalf("clearTargetNickname = (%v, %v), want (true, nil)", cleared, err)
+	}
+	if got := ResolveNickname(id, nil, states); got != "" {
+		t.Fatalf("expected cleared nickname, got %q", got)
 	}
 }
