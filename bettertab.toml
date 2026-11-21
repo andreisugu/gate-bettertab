@@ -16,26 +16,31 @@ default_group = "default"
 [roles.owner]
 prefix = "<dark_red>[Owner] </dark_red>"
 suffix = ""
+display_name = "Owner"
 weight = 1000
 
 [roles.admin]
 prefix = "<red>[Admin] </red>"
 suffix = ""
+display_name = "Admin"
 weight = 500
 
 [roles.mod]
 prefix = "<gold>[Mod] </gold>"
 suffix = ""
+display_name = "Mod"
 weight = 250
 
 [roles.vip]
 prefix = "<green>[VIP] </green>"
 suffix = ""
+display_name = "VIP"
 weight = 100
 
 [roles.default]
 prefix = "<gray>"
 suffix = "</gray>"
+display_name = "Player"
 weight = 0
 
 # Assign players to roles (lowercase usernames)
@@ -45,7 +50,7 @@ weight = 0
 # -----------------------------------------------------------------------------
 # Server Groups
 # -----------------------------------------------------------------------------
-# Define tab list formatting for specific backend server groups.
+# Server patterns support exact names, "*" wildcard, globs ("lobby_*"), or regexes ("r=^smp-[0-9]+$").
 # If multiple headers/footers are provided, they will animate in a smooth cycle.
 
 [[groups]]
@@ -56,10 +61,10 @@ sorting_placeholders = ["%role_weight%", "%username_lower%"]
 
 # Animated header frames (cycles smoothly using phase shifts)
 headers = [
-    "<rainbow:!0>═══ Minecraft Proxy Network ═══</rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
-    "<rainbow:!2>═══ Minecraft Proxy Network ═══</rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
-    "<rainbow:!4>═══ Minecraft Proxy Network ═══</rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
-    "<rainbow:!6>═══ Minecraft Proxy Network ═══</rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
+    "<rainbow:!0><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
+    "<rainbow:!2><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Welcome back, <white>%username%</white>!</gray>",
+    "<rainbow:!4><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
+    "<rainbow:!6><b>═══ Minecraft Proxy Network ═══</b></rainbow>\n<gray>Server: <aqua>%server%</aqua> | Ping: %ping_colored%</gray>",
 ]
 
 # Animated footer frames

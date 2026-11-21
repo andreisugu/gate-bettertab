@@ -19,6 +19,7 @@ default_group = "default"
 
 [roles.admin]
 prefix = "<red>[Admin] </red>"
+display_name = "Admin"
 weight = 100
 
 [player_roles]
@@ -26,7 +27,7 @@ steve = "admin"
 
 [[groups]]
 name = "hub_group"
-servers = ["lobby", "hub", "nanolimbo"]
+servers = ["lobby_*", "hub", "r=^limbo-[0-9]+$"]
 format = "<aqua>%username%</aqua>"
 headers = ["Header 1", "Header 2"]
 footers = ["Footer 1"]
@@ -50,22 +51,23 @@ format = "<white>%username%</white>"
 		t.Errorf("Expected 500ms, got %d", cfg.UpdateIntervalMs)
 	}
 
-	// Match hub_group
-	group := store.GetGroupForServer("lobby")
-	if group == nil || group.Name != "hub_group" {
-		t.Errorf("Expected hub_group for 'lobby', got %v", group)
+	// Glob & regex match hub_group
+	if g := store.GetGroupForServer("lobby_purpur"); g == nil || g.Name != "hub_group" {
+		t.Errorf("Expected hub_group for 'lobby_purpur', got %v", g)
+	}
+	if g := store.GetGroupForServer("limbo-12"); g == nil || g.Name != "hub_group" {
+		t.Errorf("Expected hub_group for 'limbo-12', got %v", g)
 	}
 
 	// Match fallback default group
-	groupDefault := store.GetGroupForServer("smp")
-	if groupDefault == nil || groupDefault.Name != "default" {
-		t.Errorf("Expected default for 'smp', got %v", groupDefault)
+	if g := store.GetGroupForServer("smp"); g == nil || g.Name != "default" {
+		t.Errorf("Expected default for 'smp', got %v", g)
 	}
 
 	// Check player role
 	role := store.GetRoleForPlayer("steve")
-	if role.Weight != 100 {
-		t.Errorf("Expected role weight 100 for steve, got %d", role.Weight)
+	if role.Weight != 100 || role.DisplayName != "Admin" {
+		t.Errorf("Expected role weight 100 and display_name Admin for steve, got %+v", role)
 	}
 }
 
@@ -101,7 +103,7 @@ pinned = "admin"
 	effVip := &spmanager.EffectiveUser{
 		PrimaryGroup: "vip",
 		Prefix:       "&a[VIP] ",
-		Groups:       []spmanager.EffectiveGroup{{Name: "vip", Weight: 100}},
+		Groups:       []spmanager.EffectiveGroup{{Name: "vip", DisplayName: "VIP+", Weight: 100}},
 	}
 	role, roleName := store.ResolveRoleForUser("Pinned", effVip)
 	if roleName != "admin" || role.Prefix != "&c[AdminCfg] " || role.Weight != 500 {
@@ -113,12 +115,12 @@ pinned = "admin"
 		Prefix:       "&5[Chaonius] ",
 		Suffix:       " &d*",
 		Groups: []spmanager.EffectiveGroup{
-			{Name: "chaonius", Weight: 130},
+			{Name: "chaonius", DisplayName: "Chaonius", Weight: 130},
 			{Name: "default", Weight: 0},
 		},
 	}
 	role, roleName = store.ResolveRoleForUser("DynamicUser", effChaonius)
-	if roleName != "chaonius" || role.Prefix != "&5[Chaonius] " || role.Suffix != " &d*" || role.Weight != 130 {
+	if roleName != "chaonius" || role.Prefix != "&5[Chaonius] " || role.Suffix != " &d*" || role.Weight != 130 || role.DisplayName != "Chaonius" {
 		t.Fatalf("unexpected resolved chaonius role: name=%q role=%+v", roleName, role)
 	}
 

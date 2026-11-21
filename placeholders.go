@@ -10,13 +10,17 @@ import (
 	"go.minekube.com/gate/pkg/edition/java/proxy"
 )
 
-var conditionRegex = regexp.MustCompile(`(?i)%condition:\s*([^\?]+)\s*\?\s*([^:]+)\s*:\s*([^%]+)%`)
-var serverCountRegex = regexp.MustCompile(`(?i)%server_online_players_([a-zA-Z0-9_\-]+)%`)
-var groupCountRegex = regexp.MustCompile(`(?i)%group_players_online_([a-zA-Z0-9_\-]+)%`)
+var (
+	conditionRegex   = regexp.MustCompile(`(?i)%condition:\s*([^\?]+)\s*\?\s*([^:]*)\s*:\s*([^%]*)%`)
+	serverCountRegex = regexp.MustCompile(`(?i)%server_online_players_([a-zA-Z0-9_\-]+)%`)
+	groupCountRegex  = regexp.MustCompile(`(?i)%group_players_online_([a-zA-Z0-9_\-]+)%`)
+	metaRegex        = regexp.MustCompile(`(?i)%meta_([a-zA-Z0-9_.\-]+)%`)
+)
 
 // PlaceholderContext provides metadata for placeholder evaluation.
 type PlaceholderContext struct {
 	Player           proxy.Player
+	RealUsername     string
 	CustomName       string
 	ServerName       string
 	ProxyPlayerCount int
@@ -28,6 +32,7 @@ type PlaceholderContext struct {
 	Role             Role
 	RoleName         string
 	Group            *Group
+	Meta             map[string]string
 }
 
 // ReplacePlaceholders evaluates and replaces all built-in, contextual, and conditional placeholders.
@@ -35,22 +40,28 @@ func ReplacePlaceholders(template string, ctx *PlaceholderContext) string {
 	if template == "" {
 		return ""
 	}
+	if ctx == nil {
+		ctx = &PlaceholderContext{}
+	}
 
 	result := template
 
 	// 1. Dynamic player values
-	username := ""
-	usernameLower := ""
+	realUsername := ctx.RealUsername
+	if realUsername == "" && ctx.Player != nil {
+		realUsername = ctx.Player.Username()
+	}
+	displayUsername := realUsername
+	if ctx.CustomName != "" {
+		displayUsername = ctx.CustomName
+	}
+	nickName := displayUsername
+	usernameLower := strings.ToLower(stripNickColors(displayUsername))
+	realUsernameLower := strings.ToLower(realUsername)
+
 	pingVal := 0
 	pingStr := "0"
-
 	if ctx.Player != nil {
-		if ctx.CustomName != "" {
-			username = ctx.CustomName
-		} else {
-			username = ctx.Player.Username()
-		}
-		usernameLower = strings.ToLower(username)
 		pingMs := ctx.Player.Ping().Milliseconds()
 		if pingMs > 0 {
 			pingVal = int(pingMs)
@@ -58,7 +69,6 @@ func ReplacePlaceholders(template string, ctx *PlaceholderContext) string {
 		}
 	}
 
-	// Colored ping placeholder
 	pingColored := "<green>" + pingStr + "ms</green>"
 	if pingVal >= 200 {
 		pingColored = "<red>" + pingStr + "ms</red>"
@@ -72,16 +82,45 @@ func ReplacePlaceholders(template string, ctx *PlaceholderContext) string {
 	}
 
 	groupName := "default"
-	if ctx.Group != nil {
+	if ctx.Group != nil && ctx.Group.Name != "" {
 		groupName = ctx.Group.Name
 	}
 
-	// 2. Custom placeholder replacements (e.g. pretty server badges)
-	prettyServer := serverName
-	if ctx.Group != nil && ctx.Group.PlaceholderReplacements != nil {
-		if serverReplacements, ok := ctx.Group.PlaceholderReplacements["%server%"]; ok {
-			if replacement, found := serverReplacements[serverName]; found {
-				prettyServer = replacement
+	roleDisplayName := strings.TrimSpace(ctx.Role.DisplayName)
+	if roleDisplayName == "" {
+		roleDisplayName = strings.TrimSpace(ctx.RoleName)
+	}
+	if roleDisplayName == "" {
+		roleDisplayName = "Player"
+	}
+
+	// 2. Custom placeholder replacements (case-insensitive across any configured key)
+	if ctx.Group != nil && len(ctx.Group.PlaceholderReplacements) > 0 {
+		rawLookup := map[string]string{
+			"%server%":            serverName,
+			"%raw_server%":        serverName,
+			"%server_group%":      groupName,
+			"%role%":              ctx.RoleName,
+			"%role_display_name%": roleDisplayName,
+			"%username%":          displayUsername,
+			"%real_username%":     realUsername,
+			"%nick%":              nickName,
+			"%nickname%":          nickName,
+		}
+		for phKey, valMap := range ctx.Group.PlaceholderReplacements {
+			lowerKey := strings.ToLower(strings.TrimSpace(phKey))
+			currentVal, ok := rawLookup[lowerKey]
+			if !ok {
+				if metaKey, isMeta := strings.CutPrefix(lowerKey, "%meta_"); isMeta && strings.HasSuffix(metaKey, "%") {
+					currentVal = lookupMetaValue(ctx.Meta, strings.TrimSuffix(metaKey, "%"))
+					ok = true
+				}
+			}
+			if !ok {
+				continue
+			}
+			if replacement, found := lookupReplacementCaseInsensitive(valMap, currentVal); found {
+				result = replacePlaceholderCaseInsensitive(result, phKey, replacement)
 			}
 		}
 	}
@@ -91,12 +130,14 @@ func ReplacePlaceholders(template string, ctx *PlaceholderContext) string {
 	dateStr := now.Format("2006-01-02")
 	timeStr := now.Format("15:04:05")
 
-	// 4. Parameterized server & group player count placeholders
+	// 4. Parameterized server, group & StonyPerms meta placeholders
 	result = serverCountRegex.ReplaceAllStringFunc(result, func(m string) string {
 		sub := serverCountRegex.FindStringSubmatch(m)
 		if len(sub) > 1 && ctx.ServerCounts != nil {
 			targetSrv := strings.ToLower(sub[1])
-			return strconv.Itoa(ctx.ServerCounts[targetSrv])
+			if count, ok := lookupIntCaseInsensitive(ctx.ServerCounts, targetSrv); ok {
+				return strconv.Itoa(count)
+			}
 		}
 		return "0"
 	})
@@ -105,15 +146,29 @@ func ReplacePlaceholders(template string, ctx *PlaceholderContext) string {
 		sub := groupCountRegex.FindStringSubmatch(m)
 		if len(sub) > 1 && ctx.GroupCounts != nil {
 			targetGrp := strings.ToLower(sub[1])
-			return strconv.Itoa(ctx.GroupCounts[targetGrp])
+			if count, ok := lookupIntCaseInsensitive(ctx.GroupCounts, targetGrp); ok {
+				return strconv.Itoa(count)
+			}
 		}
 		return "0"
 	})
 
+	result = metaRegex.ReplaceAllStringFunc(result, func(m string) string {
+		sub := metaRegex.FindStringSubmatch(m)
+		if len(sub) > 1 {
+			return lookupMetaValue(ctx.Meta, sub[1])
+		}
+		return ""
+	})
+
 	// 5. Substitute core placeholders
-	result = strings.ReplaceAll(result, "%username%", username)
+	result = strings.ReplaceAll(result, "%username%", displayUsername)
 	result = strings.ReplaceAll(result, "%username_lower%", usernameLower)
-	result = strings.ReplaceAll(result, "%server%", prettyServer)
+	result = strings.ReplaceAll(result, "%real_username%", realUsername)
+	result = strings.ReplaceAll(result, "%real_username_lower%", realUsernameLower)
+	result = strings.ReplaceAll(result, "%nick%", nickName)
+	result = strings.ReplaceAll(result, "%nickname%", nickName)
+	result = strings.ReplaceAll(result, "%server%", serverName)
 	result = strings.ReplaceAll(result, "%raw_server%", serverName)
 	result = strings.ReplaceAll(result, "%server_group%", groupName)
 	result = strings.ReplaceAll(result, "%ping%", pingStr)
@@ -136,17 +191,14 @@ func ReplacePlaceholders(template string, ctx *PlaceholderContext) string {
 	result = strings.ReplaceAll(result, "%current_time_second%", now.Format("05"))
 
 	// Role & permissions
-	roleDisplayName := ctx.RoleName
-	if roleDisplayName == "" {
-		roleDisplayName = "Player"
-	}
 	result = strings.ReplaceAll(result, "%prefix%", ctx.Role.Prefix)
 	result = strings.ReplaceAll(result, "%suffix%", ctx.Role.Suffix)
 	result = strings.ReplaceAll(result, "%role%", ctx.RoleName)
 	result = strings.ReplaceAll(result, "%role_display_name%", roleDisplayName)
 	result = strings.ReplaceAll(result, "%role_weight%", fmt.Sprintf("%04d", ctx.Role.Weight))
+	result = strings.ReplaceAll(result, "%weight%", strconv.Itoa(ctx.Role.Weight))
 
-	// 6. Conditional expressions: %condition: A < B ? TrueVal : FalseVal%
+	// 6. Conditional expressions: %condition: A <op> B ? TrueVal : FalseVal%
 	result = conditionRegex.ReplaceAllStringFunc(result, func(m string) string {
 		sub := conditionRegex.FindStringSubmatch(m)
 		if len(sub) < 4 {
@@ -165,47 +217,102 @@ func ReplacePlaceholders(template string, ctx *PlaceholderContext) string {
 	return result
 }
 
+func lookupMetaValue(meta map[string]string, key string) string {
+	if len(meta) == 0 || key == "" {
+		return ""
+	}
+	if val, ok := meta[key]; ok {
+		return val
+	}
+	for k, v := range meta {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
+}
+
+func lookupReplacementCaseInsensitive(m map[string]string, key string) (string, bool) {
+	if v, ok := m[key]; ok {
+		return v, true
+	}
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+func lookupIntCaseInsensitive(m map[string]int, key string) (int, bool) {
+	if v, ok := m[key]; ok {
+		return v, true
+	}
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func replacePlaceholderCaseInsensitive(s, ph, replacement string) string {
+	if strings.Contains(s, ph) {
+		return strings.ReplaceAll(s, ph, replacement)
+	}
+	re, err := regexp.Compile("(?i)" + regexp.QuoteMeta(ph))
+	if err != nil {
+		return s
+	}
+	return re.ReplaceAllString(s, replacement)
+}
+
+func trimConditionOperand(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
 func evaluateCondition(expr string) bool {
-	// Support ==, !=, >=, <=, >, <, contains
-	if strings.Contains(expr, "==") {
+	switch {
+	case strings.Contains(expr, "=="):
 		parts := strings.SplitN(expr, "==", 2)
-		return strings.TrimSpace(parts[0]) == strings.TrimSpace(parts[1])
-	}
-	if strings.Contains(expr, "!=") {
+		return trimConditionOperand(parts[0]) == trimConditionOperand(parts[1])
+	case strings.Contains(expr, "!="):
 		parts := strings.SplitN(expr, "!=", 2)
-		return strings.TrimSpace(parts[0]) != strings.TrimSpace(parts[1])
-	}
-	if strings.Contains(expr, ">=") {
+		return trimConditionOperand(parts[0]) != trimConditionOperand(parts[1])
+	case strings.Contains(expr, "~="):
+		parts := strings.SplitN(expr, "~=", 2)
+		return strings.EqualFold(trimConditionOperand(parts[0]), trimConditionOperand(parts[1]))
+	case strings.Contains(strings.ToLower(expr), " contains "):
+		idx := strings.Index(strings.ToLower(expr), " contains ")
+		left := trimConditionOperand(expr[:idx])
+		right := trimConditionOperand(expr[idx+len(" contains "):])
+		return strings.Contains(strings.ToLower(left), strings.ToLower(right))
+	case strings.Contains(expr, ">="):
 		parts := strings.SplitN(expr, ">=", 2)
-		v1, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-		v2, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-		if err1 == nil && err2 == nil {
-			return v1 >= v2
-		}
-	}
-	if strings.Contains(expr, "<=") {
+		v1, err1 := strconv.ParseFloat(trimConditionOperand(parts[0]), 64)
+		v2, err2 := strconv.ParseFloat(trimConditionOperand(parts[1]), 64)
+		return err1 == nil && err2 == nil && v1 >= v2
+	case strings.Contains(expr, "<="):
 		parts := strings.SplitN(expr, "<=", 2)
-		v1, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-		v2, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-		if err1 == nil && err2 == nil {
-			return v1 <= v2
-		}
-	}
-	if strings.Contains(expr, ">") {
+		v1, err1 := strconv.ParseFloat(trimConditionOperand(parts[0]), 64)
+		v2, err2 := strconv.ParseFloat(trimConditionOperand(parts[1]), 64)
+		return err1 == nil && err2 == nil && v1 <= v2
+	case strings.Contains(expr, ">"):
 		parts := strings.SplitN(expr, ">", 2)
-		v1, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-		v2, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-		if err1 == nil && err2 == nil {
-			return v1 > v2
-		}
-	}
-	if strings.Contains(expr, "<") {
+		v1, err1 := strconv.ParseFloat(trimConditionOperand(parts[0]), 64)
+		v2, err2 := strconv.ParseFloat(trimConditionOperand(parts[1]), 64)
+		return err1 == nil && err2 == nil && v1 > v2
+	case strings.Contains(expr, "<"):
 		parts := strings.SplitN(expr, "<", 2)
-		v1, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-		v2, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-		if err1 == nil && err2 == nil {
-			return v1 < v2
-		}
+		v1, err1 := strconv.ParseFloat(trimConditionOperand(parts[0]), 64)
+		v2, err2 := strconv.ParseFloat(trimConditionOperand(parts[1]), 64)
+		return err1 == nil && err2 == nil && v1 < v2
 	}
 	return false
 }

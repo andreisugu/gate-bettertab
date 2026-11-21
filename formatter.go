@@ -11,21 +11,17 @@ import (
 	c "go.minekube.com/common/minecraft/component"
 )
 
+const endGradientMarker = "</_grad>"
+
 var (
 	// Rainbow tag supporting <rainbow>, <rainbow:10>, <rainbow:!2>, <rainbow:!>, <rainbow:reversed:5>
-	rainbowTagRegex = regexp.MustCompile(`(?i)<rainbow(?::(!)?(?:reversed)?:?([0-9.-]+)?)?>(.*?)</rainbow(?::[^>]*)?>`)
+	rainbowTagRegex = regexp.MustCompile(`(?is)<rainbow(?::(!)?(?:reversed)?:?([0-9.-]+)?)?>(.*?)</rainbow(?::[^>]*)?>`)
 
 	// MineDown inline rainbow: &rainbow&Text or &rainbow:20&Text
-	mineDownRainbowRegex = regexp.MustCompile(`(?i)&rainbow(?::([0-9.-]+))?&(.*?)(?:&r|&reset|&rainbow&|$)`)
+	mineDownRainbowRegex = regexp.MustCompile(`(?is)&rainbow(?::([0-9.-]+))?&(.*?)(?:&r|&reset|&rainbow&|$)`)
 
 	// Multi-stop gradient regex: <gradient:#c1:#c2:...[:phase]>Text</gradient>
-	gradientTagRegex = regexp.MustCompile(`(?i)<gradient:([^>]+)>(.*?)</gradient>`)
-
-	// Color tags
-	tagHexRegex   = regexp.MustCompile(`(?i)<#([0-9a-f]{6})>`)
-	tagShortHex   = regexp.MustCompile(`(?i)<#([0-9a-f]{3})>`)
-	tagColorRegex = regexp.MustCompile(`(?i)<color:#([0-9a-f]{6})>`)
-	clickTagRegex = regexp.MustCompile(`(?i)<click:(open_url|run_command|suggest_command):['"]?([^'">]+)['"]?>(.*?)</click>`)
+	gradientTagRegex = regexp.MustCompile(`(?is)<gradient:([^>]+)>(.*?)</gradient>`)
 
 	legacyColorMap = map[rune]color.Color{
 		'0': color.Black,
@@ -69,62 +65,18 @@ var (
 	}
 )
 
-// FormatText parses MiniMessage, MineDown, and Legacy color syntax into a native Minecraft Component.
+// FormatText parses MiniMessage, MineDown, Bungee hex (&x&R&R&G&G&B&B), and Legacy color syntax into a native Minecraft Component.
 func FormatText(input string) c.Component {
 	if input == "" {
 		return &c.Text{Content: ""}
 	}
 
-	// Support MiniMessage <click:...>...</click> tags
-	if clickTagRegex.MatchString(input) {
-		root := &c.Text{Content: ""}
-		lastIdx := 0
-		for _, loc := range clickTagRegex.FindAllStringSubmatchIndex(input, -1) {
-			if loc[0] > lastIdx {
-				before := input[lastIdx:loc[0]]
-				root.Extra = append(root.Extra, FormatText(before))
-			}
-			action := strings.ToLower(input[loc[2]:loc[3]])
-			value := input[loc[4]:loc[5]]
-			inner := input[loc[6]:loc[7]]
-
-			innerComp := FormatText(inner)
-			var clickEv c.ClickEvent
-			var hoverEv c.HoverEvent
-
-			switch action {
-			case "open_url":
-				clickEv = c.OpenUrl(value)
-				hoverEv = c.ShowText(FormatText(fmt.Sprintf("&eClick to open link:\n&b%s", value)))
-			case "run_command":
-				clickEv = c.RunCommand(value)
-				hoverEv = c.ShowText(FormatText(fmt.Sprintf("&aClick to run:\n&b%s", value)))
-			case "suggest_command":
-				clickEv = c.SuggestCommand(value)
-				hoverEv = c.ShowText(FormatText(fmt.Sprintf("&eClick to insert:\n&b%s", value)))
-			}
-
-			applyEvents := func(target c.Component) {
-				if st := target.Style(); st != nil {
-					st.ClickEvent = clickEv
-					st.HoverEvent = hoverEv
-				}
-			}
-			applyEvents(innerComp)
-			for _, ch := range innerComp.Children() {
-				applyEvents(ch)
-			}
-
-			root.Extra = append(root.Extra, innerComp)
-			lastIdx = loc[1]
-		}
-		if lastIdx < len(input) {
-			root.Extra = append(root.Extra, FormatText(input[lastIdx:]))
-		}
-		return root
+	// 1. Handle nested <click:...> and <hover:show_text:...> interactive tags.
+	if hasStructuralTag(input) {
+		return parseStructuralTags(input)
 	}
 
-	// 1. Process Adventure / MiniMessage <rainbow> tags with phase and reverse support
+	// 2. Process Adventure / MiniMessage <rainbow> tags with phase and reverse support.
 	input = rainbowTagRegex.ReplaceAllStringFunc(input, func(m string) string {
 		sub := rainbowTagRegex.FindStringSubmatch(m)
 		if len(sub) < 4 {
@@ -137,11 +89,10 @@ func FormatText(input string) c.Component {
 				phase = parsed
 			}
 		}
-		text := sub[3]
-		return applyRainbow(text, phase, isReversed)
+		return applyRainbow(sub[3], phase, isReversed) + endGradientMarker
 	})
 
-	// 2. Process MineDown &rainbow[:phase]& inline syntax
+	// 3. Process MineDown &rainbow[:phase]& inline syntax.
 	input = mineDownRainbowRegex.ReplaceAllStringFunc(input, func(m string) string {
 		sub := mineDownRainbowRegex.FindStringSubmatch(m)
 		if len(sub) < 3 {
@@ -153,139 +104,319 @@ func FormatText(input string) c.Component {
 				phase = parsed
 			}
 		}
-		text := sub[2]
-		return applyRainbow(text, phase, false)
+		return applyRainbow(sub[2], phase, false) + endGradientMarker
 	})
 
-	// 3. Process <gradient:...> tags (multi-stop supported)
+	// 4. Process <gradient:...> tags (multi-stop and optional phase).
 	input = gradientTagRegex.ReplaceAllStringFunc(input, func(m string) string {
 		sub := gradientTagRegex.FindStringSubmatch(m)
 		if len(sub) < 3 {
 			return m
 		}
-		colorDefs := sub[1]
-		text := sub[2]
-		return applyMultiGradient(text, colorDefs)
+		return applyMultiGradient(sub[2], sub[1]) + endGradientMarker
 	})
 
-	// 4. Normalize short hex tags like <#fff> -> <#ffffff>
-	input = tagShortHex.ReplaceAllStringFunc(input, func(m string) string {
-		sub := tagShortHex.FindStringSubmatch(m)
-		if len(sub) < 2 {
-			return m
-		}
-		s := sub[1]
-		return fmt.Sprintf("<#%c%c%c%c%c%c>", s[0], s[0], s[1], s[1], s[2], s[2])
-	})
-
-	// 5. Convert MiniMessage style & color tags to internal markers
-	input = tagHexRegex.ReplaceAllString(input, "&#$1")
-	input = tagColorRegex.ReplaceAllString(input, "&#$1")
-
-	for name, hex := range namedColorHexMap {
-		input = strings.ReplaceAll(input, fmt.Sprintf("<%s>", name), "&#"+strings.TrimPrefix(hex, "#"))
-		input = strings.ReplaceAll(input, fmt.Sprintf("</%s>", name), "&r")
-	}
-
-	// Style tags
-	input = strings.ReplaceAll(input, "<b>", "&l")
-	input = strings.ReplaceAll(input, "<bold>", "&l")
-	input = strings.ReplaceAll(input, "</b>", "&r")
-	input = strings.ReplaceAll(input, "</bold>", "&r")
-	input = strings.ReplaceAll(input, "<i>", "&o")
-	input = strings.ReplaceAll(input, "<italic>", "&o")
-	input = strings.ReplaceAll(input, "</i>", "&r")
-	input = strings.ReplaceAll(input, "</italic>", "&r")
-	input = strings.ReplaceAll(input, "<u>", "&n")
-	input = strings.ReplaceAll(input, "<underlined>", "&n")
-	input = strings.ReplaceAll(input, "</u>", "&r")
-	input = strings.ReplaceAll(input, "</underlined>", "&r")
-	input = strings.ReplaceAll(input, "<s>", "&m")
-	input = strings.ReplaceAll(input, "<strikethrough>", "&m")
-	input = strings.ReplaceAll(input, "</s>", "&r")
-	input = strings.ReplaceAll(input, "</strikethrough>", "&r")
-	input = strings.ReplaceAll(input, "<obf>", "&k")
-	input = strings.ReplaceAll(input, "<obfuscated>", "&k")
-	input = strings.ReplaceAll(input, "</obf>", "&r")
-	input = strings.ReplaceAll(input, "</obfuscated>", "&r")
-	input = strings.ReplaceAll(input, "<reset>", "&r")
-	input = strings.ReplaceAll(input, "</reset>", "&r")
-	input = strings.ReplaceAll(input, "<r>", "&r")
-	input = strings.ReplaceAll(input, "</r>", "&r")
-
-	// 6. Parse tokenized string into Component tree
-	return parseLegacyTokens(input)
+	// 5. Parse unified token stream into Component tree preserving nested color/style stacks.
+	return parseTokenStream(input)
 }
 
-func parseLegacyTokens(s string) c.Component {
+func hasStructuralTag(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "<click:") || strings.Contains(lower, "<hover:")
+}
+
+func parseStructuralTags(input string) c.Component {
+	root := &c.Text{Content: ""}
+	lower := strings.ToLower(input)
+	pos := 0
+	for pos < len(input) {
+		clickIdx := strings.Index(lower[pos:], "<click:")
+		hoverIdx := strings.Index(lower[pos:], "<hover:")
+		nextIdx := -1
+		kind := ""
+		switch {
+		case clickIdx >= 0 && (hoverIdx < 0 || clickIdx < hoverIdx):
+			nextIdx = pos + clickIdx
+			kind = "click"
+		case hoverIdx >= 0:
+			nextIdx = pos + hoverIdx
+			kind = "hover"
+		}
+		if nextIdx < 0 {
+			appendSegment(root, FormatText(input[pos:]))
+			break
+		}
+		if nextIdx > pos {
+			appendSegment(root, FormatText(input[pos:nextIdx]))
+		}
+		tagOpen := nextIdx + 1 + len(kind) + 1 // skips "<click:" or "<hover:"
+		closeBracket := findUnquotedCloseBracket(input, tagOpen)
+		if closeBracket < 0 {
+			appendSegment(root, FormatText(input[nextIdx:]))
+			break
+		}
+		header := input[tagOpen:closeBracket]
+		bodyStart := closeBracket + 1
+		bodyEnd, afterTag := findMatchingClosingTag(lower, kind, bodyStart)
+		innerRaw := input[bodyStart:bodyEnd]
+		innerComp := FormatText(innerRaw)
+
+		applyStructuralAttribute(innerComp, kind, header)
+		appendSegment(root, innerComp)
+		pos = afterTag
+	}
+	if len(root.Extra) == 1 {
+		return root.Extra[0]
+	}
+	return root
+}
+
+func appendSegment(root *c.Text, comp c.Component) {
+	if comp == nil {
+		return
+	}
+	if t, ok := comp.(*c.Text); ok && t.Content == "" && len(t.Extra) == 0 && t.S.IsZero() {
+		return
+	}
+	root.Extra = append(root.Extra, comp)
+}
+
+func findUnquotedCloseBracket(s string, start int) int {
+	var quote byte
+	for i := start; i < len(s); i++ {
+		ch := s[i]
+		if quote != 0 {
+			if ch == '\\' && i+1 < len(s) {
+				i++
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch == '>' {
+			return i
+		}
+	}
+	return -1
+}
+
+func findMatchingClosingTag(lower, kind string, start int) (bodyEnd, nextPos int) {
+	openTok := "<" + kind + ":"
+	closeTok := "</" + kind + ">"
+	depth := 1
+	i := start
+	for i < len(lower) {
+		if strings.HasPrefix(lower[i:], closeTok) {
+			depth--
+			if depth == 0 {
+				return i, i + len(closeTok)
+			}
+			i += len(closeTok)
+			continue
+		}
+		if strings.HasPrefix(lower[i:], openTok) {
+			end := findUnquotedCloseBracket(lower, i+len(openTok))
+			if end >= 0 {
+				depth++
+				i = end + 1
+				continue
+			}
+		}
+		i++
+	}
+	return len(lower), len(lower)
+}
+
+func applyStructuralAttribute(comp c.Component, kind, header string) {
+	actionRaw, valRaw, hasSep := strings.Cut(header, ":")
+	if !hasSep {
+		return
+	}
+	action := strings.ToLower(strings.TrimSpace(actionRaw))
+	val := unquoteAttr(strings.TrimSpace(valRaw))
+
+	switch kind {
+	case "click":
+		var clickEv c.ClickEvent
+		var defaultHover c.HoverEvent
+		switch action {
+		case "open_url":
+			clickEv = c.OpenUrl(val)
+			defaultHover = c.ShowText(FormatText(fmt.Sprintf("&eClick to open link:\n&b%s", val)))
+		case "run_command":
+			clickEv = c.RunCommand(val)
+			defaultHover = c.ShowText(FormatText(fmt.Sprintf("&aClick to run:\n&b%s", val)))
+		case "suggest_command":
+			clickEv = c.SuggestCommand(val)
+			defaultHover = c.ShowText(FormatText(fmt.Sprintf("&eClick to insert:\n&b%s", val)))
+		default:
+			return
+		}
+		walkComponents(comp, func(target c.Component) {
+			if st := target.Style(); st != nil {
+				if st.ClickEvent == nil {
+					st.ClickEvent = clickEv
+				}
+				if st.HoverEvent == nil {
+					st.HoverEvent = defaultHover
+				}
+			}
+		})
+	case "hover":
+		if action != "show_text" {
+			return
+		}
+		hoverEv := c.ShowText(FormatText(val))
+		walkComponents(comp, func(target c.Component) {
+			if st := target.Style(); st != nil && st.HoverEvent == nil {
+				st.HoverEvent = hoverEv
+			}
+		})
+	}
+}
+
+func walkComponents(comp c.Component, fn func(c.Component)) {
+	if comp == nil {
+		return
+	}
+	fn(comp)
+	for _, ch := range comp.Children() {
+		walkComponents(ch, fn)
+	}
+}
+
+func unquoteAttr(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '\'' && s[len(s)-1] == '\'') || (s[0] == '"' && s[len(s)-1] == '"') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+type styleLayer struct {
+	tagDepth int
+	inline   bool
+}
+
+func (sl styleLayer) state() c.State {
+	if sl.tagDepth > 0 || sl.inline {
+		return c.True
+	}
+	return c.NotSet
+}
+
+func parseTokenStream(s string) c.Component {
 	root := &c.Text{Content: ""}
 	var (
-		curColor      color.Color
-		bold          c.State
-		italic        c.State
-		underlined    c.State
-		strikethrough c.State
-		obfuscated    c.State
+		colorStack    []color.Color
+		inlineColor   color.Color
+		bold          styleLayer
+		italic        styleLayer
+		underlined    styleLayer
+		strikethrough styleLayer
+		obfuscated    styleLayer
 		buf           strings.Builder
 	)
 
-	flush := func() {
-		if buf.Len() > 0 {
-			child := &c.Text{
-				Content: buf.String(),
-				S: c.Style{
-					Color:         curColor,
-					Bold:          bold,
-					Italic:        italic,
-					Underlined:    underlined,
-					Strikethrough: strikethrough,
-					Obfuscated:    obfuscated,
-				},
-			}
-			root.Extra = append(root.Extra, child)
-			buf.Reset()
+	activeColor := func() color.Color {
+		if inlineColor != nil {
+			return inlineColor
 		}
+		if len(colorStack) > 0 {
+			return colorStack[len(colorStack)-1]
+		}
+		return nil
 	}
 
-	resetFormat := func() {
-		bold = c.NotSet
-		italic = c.NotSet
-		underlined = c.NotSet
-		strikethrough = c.NotSet
-		obfuscated = c.NotSet
+	flush := func() {
+		if buf.Len() == 0 {
+			return
+		}
+		child := &c.Text{
+			Content: buf.String(),
+			S: c.Style{
+				Color:         activeColor(),
+				Bold:          bold.state(),
+				Italic:        italic.state(),
+				Underlined:    underlined.state(),
+				Strikethrough: strikethrough.state(),
+				Obfuscated:    obfuscated.state(),
+			},
+		}
+		root.Extra = append(root.Extra, child)
+		buf.Reset()
 	}
 
-	i := 0
+	resetInlineStyles := func() {
+		bold.inline = false
+		italic.inline = false
+		underlined.inline = false
+		strikethrough.inline = false
+		obfuscated.inline = false
+	}
+
+	resetAllStyles := func() {
+		colorStack = nil
+		inlineColor = nil
+		bold = styleLayer{}
+		italic = styleLayer{}
+		underlined = styleLayer{}
+		strikethrough = styleLayer{}
+		obfuscated = styleLayer{}
+	}
+
 	runes := []rune(s)
 	n := len(runes)
-
-	for i < n {
+	for i := 0; i < n; {
 		r := runes[i]
-		if (r == '&' || r == '§') && i+1 < n {
-			next := runes[i+1]
 
-			// Check for hex &#RRGGBB
-			if next == '#' && i+7 < n {
+		// 1. MiniMessage / internal tags <...>
+		if r == '<' {
+			if closeOffset := findClosingAngle(runes, i); closeOffset > 0 {
+				rawTag := string(runes[i+1 : i+closeOffset])
+				if handled := applyTagToken(rawTag, flush, &colorStack, &inlineColor,
+					&bold, &italic, &underlined, &strikethrough, &obfuscated, resetAllStyles); handled {
+					i += closeOffset + 1
+					continue
+				}
+			}
+		}
+
+		// 2. Legacy '&' / '§' formatting and hex codes
+		if (r == '&' || r == '§') && i+1 < n {
+			// Bungee hex: &x&R&R&G&G&B&B
+			if (runes[i+1] == 'x' || runes[i+1] == 'X') && i+13 < n {
+				if col, ok := parseBungeeHex(runes[i : i+14]); ok {
+					flush()
+					inlineColor = col
+					i += 14
+					continue
+				}
+			}
+
+			// Inline hex: &#RRGGBB
+			if runes[i+1] == '#' && i+7 < n {
 				hexStr := string(runes[i+2 : i+8])
 				if col, err := color.Hex("#" + hexStr); err == nil {
 					flush()
-					curColor = col
-					resetFormat()
+					inlineColor = col
 					i += 8
 					continue
 				}
 			}
 
-			// Check standard single character formatting
-			lower := next
-			if lower >= 'A' && lower <= 'Z' {
-				lower = lower + ('a' - 'A')
-			}
-
+			lower := toLowerASCII(runes[i+1])
 			if col, ok := legacyColorMap[lower]; ok {
 				flush()
-				curColor = col
-				resetFormat()
+				inlineColor = col
+				resetInlineStyles()
 				i += 2
 				continue
 			}
@@ -293,33 +424,33 @@ func parseLegacyTokens(s string) c.Component {
 			switch lower {
 			case 'l':
 				flush()
-				bold = c.True
+				bold.inline = true
 				i += 2
 				continue
 			case 'o':
 				flush()
-				italic = c.True
+				italic.inline = true
 				i += 2
 				continue
 			case 'n':
 				flush()
-				underlined = c.True
+				underlined.inline = true
 				i += 2
 				continue
 			case 'm':
 				flush()
-				strikethrough = c.True
+				strikethrough.inline = true
 				i += 2
 				continue
 			case 'k':
 				flush()
-				obfuscated = c.True
+				obfuscated.inline = true
 				i += 2
 				continue
 			case 'r':
 				flush()
-				curColor = nil
-				resetFormat()
+				inlineColor = nil
+				resetInlineStyles()
 				i += 2
 				continue
 			}
@@ -333,50 +464,203 @@ func parseLegacyTokens(s string) c.Component {
 	return root
 }
 
-// applyRainbow uses the exact sine-wave color formula from Kyori Adventure / MineDown / Velocitab.
-//
-// In Adventure MiniMessage:
-//
-//	float fPhase = phase / 10f;
-//	float center = 128;
-//	float width = 127;
-//	double frequency = Math.PI * 2 / length;
-//
-//	Red   = sin(frequency * i + 2 + fPhase) * width + center
-//	Green = sin(frequency * i + 0 + fPhase) * width + center
-//	Blue  = sin(frequency * i + 4 + fPhase) * width + center
-func applyRainbow(text string, phase float64, reversed bool) string {
-	runes := []rune(text)
-	length := len(runes)
-	if length == 0 {
-		return ""
+func findClosingAngle(runes []rune, start int) int {
+	limit := min(len(runes)-start, 96)
+	for off := 1; off < limit; off++ {
+		if runes[start+off] == '\n' {
+			return -1
+		}
+		if runes[start+off] == '>' {
+			return off
+		}
 	}
-
-	fPhase := phase / 10.0
-	center := 128.0
-	width := 127.0
-	frequency := (math.Pi * 2.0) / float64(length)
-	if reversed {
-		frequency = -frequency
-	}
-
-	var b strings.Builder
-	for i, r := range runes {
-		idx := float64(i)
-		rVal := math.Sin(frequency*idx+2.0+fPhase)*width + center
-		gVal := math.Sin(frequency*idx+0.0+fPhase)*width + center
-		bVal := math.Sin(frequency*idx+4.0+fPhase)*width + center
-
-		curR := clamp(int(math.Round(rVal)))
-		curG := clamp(int(math.Round(gVal)))
-		curB := clamp(int(math.Round(bVal)))
-
-		b.WriteString(fmt.Sprintf("&#%02x%02x%02x%c", curR, curG, curB, r))
-	}
-	return b.String()
+	return -1
 }
 
-// applyMultiGradient interpolates multiple color stops across the text length.
+func applyTagToken(
+	rawTag string,
+	flush func(),
+	colorStack *[]color.Color,
+	inlineColor *color.Color,
+	bold, italic, underlined, strikethrough, obfuscated *styleLayer,
+	resetAll func(),
+) bool {
+	if rawTag == "" {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(rawTag))
+
+	if lower == "/_grad" {
+		flush()
+		*inlineColor = nil
+		return true
+	}
+
+	if after, isClose := strings.CutPrefix(lower, "/"); isClose {
+		switch after {
+		case "b", "bold":
+			flush()
+			if bold.tagDepth > 0 {
+				bold.tagDepth--
+			}
+			return true
+		case "i", "italic":
+			flush()
+			if italic.tagDepth > 0 {
+				italic.tagDepth--
+			}
+			return true
+		case "u", "underlined":
+			flush()
+			if underlined.tagDepth > 0 {
+				underlined.tagDepth--
+			}
+			return true
+		case "s", "st", "strikethrough":
+			flush()
+			if strikethrough.tagDepth > 0 {
+				strikethrough.tagDepth--
+			}
+			return true
+		case "obf", "obfuscated":
+			flush()
+			if obfuscated.tagDepth > 0 {
+				obfuscated.tagDepth--
+			}
+			return true
+		case "reset", "r":
+			flush()
+			resetAll()
+			return true
+		case "color", "colour":
+			flush()
+			popColor(colorStack, inlineColor)
+			return true
+		}
+		if _, isHex := strings.CutPrefix(after, "#"); isHex {
+			flush()
+			popColor(colorStack, inlineColor)
+			return true
+		}
+		if _, isNamed := namedColorHexMap[after]; isNamed {
+			flush()
+			popColor(colorStack, inlineColor)
+			return true
+		}
+		return false
+	}
+
+	switch lower {
+	case "b", "bold":
+		flush()
+		bold.tagDepth++
+		return true
+	case "i", "italic":
+		flush()
+		italic.tagDepth++
+		return true
+	case "u", "underlined":
+		flush()
+		underlined.tagDepth++
+		return true
+	case "s", "st", "strikethrough":
+		flush()
+		strikethrough.tagDepth++
+		return true
+	case "obf", "obfuscated":
+		flush()
+		obfuscated.tagDepth++
+		return true
+	case "reset", "r":
+		flush()
+		resetAll()
+		return true
+	}
+
+	colorSpec := lower
+	if spec, ok := strings.CutPrefix(lower, "color:"); ok {
+		colorSpec = spec
+	} else if spec, ok := strings.CutPrefix(lower, "colour:"); ok {
+		colorSpec = spec
+	} else if !strings.HasPrefix(lower, "#") {
+		if _, ok := namedColorHexMap[lower]; !ok {
+			return false
+		}
+	}
+
+	if hex, ok := parseColorToHex(colorSpec); ok {
+		if col, err := color.Hex(hex); err == nil {
+			flush()
+			*colorStack = append(*colorStack, col)
+			*inlineColor = nil
+			return true
+		}
+	}
+	return false
+}
+
+func popColor(stack *[]color.Color, inlineColor *color.Color) {
+	if len(*stack) > 0 {
+		*stack = (*stack)[:len(*stack)-1]
+	}
+	*inlineColor = nil
+}
+
+func parseBungeeHex(seq []rune) (color.Color, bool) {
+	if len(seq) != 14 {
+		return nil, false
+	}
+	marker := seq[0]
+	if (marker != '&' && marker != '§') || (seq[1] != 'x' && seq[1] != 'X') {
+		return nil, false
+	}
+	var hexBuf [6]byte
+	for idx := 0; idx < 6; idx++ {
+		sep := seq[2+idx*2]
+		digit := seq[3+idx*2]
+		if sep != marker && sep != '&' && sep != '§' {
+			return nil, false
+		}
+		if !isHexDigit(digit) {
+			return nil, false
+		}
+		hexBuf[idx] = byte(digit)
+	}
+	col, err := color.Hex("#" + string(hexBuf[:]))
+	if err != nil {
+		return nil, false
+	}
+	return col, true
+}
+
+func isHexDigit(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
+func toLowerASCII(r rune) rune {
+	if r >= 'A' && r <= 'Z' {
+		return r + ('a' - 'A')
+	}
+	return r
+}
+
+func applyRainbow(text string, phase float64, reversed bool) string {
+	return applyTagAwareColors(text, func(visIdx, visTotal int) string {
+		fPhase := phase / 10.0
+		center := 128.0
+		width := 127.0
+		frequency := (math.Pi * 2.0) / float64(max(visTotal, 1))
+		if reversed {
+			frequency = -frequency
+		}
+		idx := float64(visIdx)
+		curR := clamp(int(math.Round(math.Sin(frequency*idx+2.0+fPhase)*width + center)))
+		curG := clamp(int(math.Round(math.Sin(frequency*idx+0.0+fPhase)*width + center)))
+		curB := clamp(int(math.Round(math.Sin(frequency*idx+4.0+fPhase)*width + center)))
+		return fmt.Sprintf("&#%02x%02x%02x", curR, curG, curB)
+	})
+}
+
 func applyMultiGradient(text string, colorDefs string) string {
 	parts := strings.Split(colorDefs, ":")
 	if len(parts) < 2 {
@@ -384,14 +668,21 @@ func applyMultiGradient(text string, colorDefs string) string {
 	}
 
 	var colors [][3]int
-	for _, p := range parts {
+	phase := 0.0
+	hasPhase := false
+
+	for idx, p := range parts {
 		clean := strings.TrimSpace(p)
 		if clean == "" {
 			continue
 		}
-		// Check if it's a number (phase option)
-		if _, err := strconv.ParseFloat(clean, 64); err == nil && len(colors) >= 2 {
-			continue
+		// Only treat a trailing numeric argument as phase after at least two stops.
+		if idx == len(parts)-1 && len(colors) >= 2 {
+			if parsed, err := strconv.ParseFloat(clean, 64); err == nil {
+				phase = parsed
+				hasPhase = true
+				continue
+			}
 		}
 		if hex, ok := parseColorToHex(clean); ok {
 			r, g, b := hexToRGB(hex)
@@ -403,23 +694,24 @@ func applyMultiGradient(text string, colorDefs string) string {
 		return text
 	}
 	if len(colors) == 1 {
-		return fmt.Sprintf("&#%02x%02x%02x%s", colors[0][0], colors[0][1], colors[0][2], text)
-	}
-
-	runes := []rune(text)
-	length := len(runes)
-	if length == 0 {
-		return ""
-	}
-	if length == 1 {
-		return fmt.Sprintf("&#%02x%02x%02x%c", colors[0][0], colors[0][1], colors[0][2], runes[0])
+		hex := fmt.Sprintf("&#%02x%02x%02x", colors[0][0], colors[0][1], colors[0][2])
+		return applyTagAwareColors(text, func(_, _ int) string { return hex })
 	}
 
 	numSegments := len(colors) - 1
-	var b strings.Builder
+	return applyTagAwareColors(text, func(visIdx, visTotal int) string {
+		progress := 0.0
+		if visTotal > 1 {
+			progress = float64(visIdx) / float64(visTotal-1)
+		}
+		if hasPhase && phase != 0 {
+			shifted := math.Mod(math.Abs(progress+phase), 2.0)
+			if shifted > 1.0 {
+				shifted = 2.0 - shifted
+			}
+			progress = shifted
+		}
 
-	for i, r := range runes {
-		progress := float64(i) / float64(length-1)
 		scaledProgress := progress * float64(numSegments)
 		segIdx := int(math.Floor(scaledProgress))
 		if segIdx >= numSegments {
@@ -429,29 +721,113 @@ func applyMultiGradient(text string, colorDefs string) string {
 
 		c1 := colors[segIdx]
 		c2 := colors[segIdx+1]
-
 		curR := clamp(int(math.Round(float64(c1[0]) + segProgress*float64(c2[0]-c1[0]))))
 		curG := clamp(int(math.Round(float64(c1[1]) + segProgress*float64(c2[1]-c1[1]))))
 		curB := clamp(int(math.Round(float64(c1[2]) + segProgress*float64(c2[2]-c1[2]))))
+		return fmt.Sprintf("&#%02x%02x%02x", curR, curG, curB)
+	})
+}
 
-		b.WriteString(fmt.Sprintf("&#%02x%02x%02x%c", curR, curG, curB, r))
+func applyTagAwareColors(text string, colorAt func(visIdx, visTotal int) string) string {
+	type segment struct {
+		raw     string
+		visible bool
 	}
 
+	runes := []rune(text)
+	n := len(runes)
+	segs := make([]segment, 0, n)
+	visTotal := 0
+
+	for i := 0; i < n; {
+		r := runes[i]
+		if r == '<' {
+			if off := findClosingAngle(runes, i); off > 0 && isKnownFormattingTag(string(runes[i+1:i+off])) {
+				segs = append(segs, segment{raw: string(runes[i : i+off+1])})
+				i += off + 1
+				continue
+			}
+		}
+		if (r == '&' || r == '§') && i+1 < n {
+			if (runes[i+1] == 'x' || runes[i+1] == 'X') && i+13 < n {
+				if _, ok := parseBungeeHex(runes[i : i+14]); ok {
+					segs = append(segs, segment{raw: string(runes[i : i+14])})
+					i += 14
+					continue
+				}
+			}
+			if runes[i+1] == '#' && i+7 < n {
+				if _, err := color.Hex("#" + string(runes[i+2:i+8])); err == nil {
+					segs = append(segs, segment{raw: string(runes[i : i+8])})
+					i += 8
+					continue
+				}
+			}
+			lower := toLowerASCII(runes[i+1])
+			if _, ok := legacyColorMap[lower]; ok || strings.ContainsRune("klmnor", lower) {
+				segs = append(segs, segment{raw: string(runes[i : i+2])})
+				i += 2
+				continue
+			}
+		}
+		if r == '\n' || r == '\r' {
+			segs = append(segs, segment{raw: string(r)})
+			i++
+			continue
+		}
+		segs = append(segs, segment{raw: string(r), visible: true})
+		visTotal++
+		i++
+	}
+
+	if visTotal == 0 {
+		return text
+	}
+
+	var b strings.Builder
+	visIdx := 0
+	for _, seg := range segs {
+		if !seg.visible {
+			b.WriteString(seg.raw)
+			continue
+		}
+		b.WriteString(colorAt(visIdx, visTotal))
+		b.WriteString(seg.raw)
+		visIdx++
+	}
 	return b.String()
 }
 
-func parseColorToHex(s string) (string, bool) {
-	s = strings.TrimPrefix(s, "#")
-	if len(s) == 3 {
+func isKnownFormattingTag(rawTag string) bool {
+	lower := strings.ToLower(strings.TrimSpace(rawTag))
+	trimmed := strings.TrimPrefix(lower, "/")
+	switch trimmed {
+	case "b", "bold", "i", "italic", "u", "underlined",
+		"s", "st", "strikethrough", "obf", "obfuscated",
+		"reset", "r", "color", "colour", "_grad":
+		return true
+	}
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(lower, "color:") || strings.HasPrefix(lower, "colour:") {
+		return true
+	}
+	_, ok := namedColorHexMap[trimmed]
+	return ok
+}
+
+func parseColorToHex(raw string) (string, bool) {
+	clean := strings.TrimSpace(raw)
+	if hex, ok := namedColorHexMap[strings.ToLower(clean)]; ok {
+		return hex, true
+	}
+	hasHash := strings.HasPrefix(clean, "#")
+	s := strings.TrimPrefix(clean, "#")
+	if hasHash && len(s) == 3 {
 		s = fmt.Sprintf("%c%c%c%c%c%c", s[0], s[0], s[1], s[1], s[2], s[2])
 	}
 	if len(s) == 6 {
 		if _, err := strconv.ParseInt(s, 16, 32); err == nil {
-			return "#" + s, true
+			return "#" + strings.ToLower(s), true
 		}
-	}
-	if hex, ok := namedColorHexMap[strings.ToLower(s)]; ok {
-		return hex, true
 	}
 	return "", false
 }
