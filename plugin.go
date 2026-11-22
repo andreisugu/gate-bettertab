@@ -28,9 +28,13 @@ var Plugin = proxy.Plugin{
 		}
 
 		store := NewConfigStore(configPath)
-		if _, err := store.Load(); err != nil {
+		cfg, err := store.Load()
+		if err != nil {
 			log.Error(err, "Failed to load bettertab configuration")
 			return err
+		}
+		if cfg.MigrationBackup != "" {
+			log.Info("Migrated BetterTab config", "fromVersion", cfg.MigratedFrom, "toVersion", CurrentConfigVersion, "backup", cfg.MigrationBackup)
 		}
 
 		states := NewPlayerStateManager()

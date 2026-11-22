@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	spmanager "github.com/andreisugu/gate-stonyperms/manager"
 	"github.com/pelletier/go-toml/v2"
@@ -18,6 +19,9 @@ const defaultConfigTemplate = `# ===============================================
 # =============================================================================
 # High-performance, customizable tab list and player list formatting for Gate.
 # =============================================================================
+
+# Schema version used by automatic config migration.
+config_version = 2
 
 # Main settings
 update_interval_ms = 1000
@@ -144,8 +148,14 @@ func (g *Group) MatchesServer(serverName string) bool {
 	return false
 }
 
+// CurrentConfigVersion is bumped whenever the TOML schema gains new keys.
+const CurrentConfigVersion = 2
+
 // Config represents the complete BetterTab configuration.
 type Config struct {
+	ConfigVersion    int               `toml:"config_version"`
+	MigratedFrom     int               `toml:"-"`
+	MigrationBackup  string            `toml:"-"`
 	UpdateIntervalMs int               `toml:"update_interval_ms"`
 	SortPlayers      bool              `toml:"sort_players"`
 	DefaultGroup     string            `toml:"default_group"`
@@ -171,6 +181,62 @@ func (cs *ConfigStore) Path() string {
 	return cs.path
 }
 
+func migrateBetterTabConfig(filePath string, oldVersion int) (string, error) {
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", err
+	}
+	backup := fmt.Sprintf("%s.bak-v%d-%s", filePath, oldVersion, time.Now().UTC().Format("20060102-150405"))
+	if err := os.WriteFile(backup, raw, 0o600); err != nil {
+		return "", err
+	}
+
+	text := string(raw)
+	text = regexp.MustCompile(`(?m)^config_version\s*=.*$`).ReplaceAllString(text, "")
+	text = fmt.Sprintf("config_version = %d\n", CurrentConfigVersion) + text
+
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines)+8)
+	for i := 0; i < len(lines); i++ {
+		out = append(out, lines[i])
+		trimmed := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(trimmed, "[roles.") || !strings.HasSuffix(trimmed, "]") {
+			continue
+		}
+		hasDisplayName := false
+		for j := i + 1; j < len(lines); j++ {
+			next := strings.TrimSpace(lines[j])
+			if strings.HasPrefix(next, "[") {
+				break
+			}
+			if strings.HasPrefix(next, "display_name") {
+				hasDisplayName = true
+				break
+			}
+		}
+		if hasDisplayName {
+			continue
+		}
+		role := strings.TrimSuffix(strings.TrimPrefix(trimmed, "[roles."), "]")
+		if role == "" {
+			continue
+		}
+		label := strings.ToUpper(role[:1]) + role[1:]
+		out = append(out, fmt.Sprintf("display_name = %q", label))
+	}
+	text = strings.Join(out, "\n")
+
+	tmp := filePath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(text), 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp, filePath); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return backup, nil
+}
+
 // Load loads or creates the configuration file.
 func (cs *ConfigStore) Load() (*Config, error) {
 	cs.mu.Lock()
@@ -194,6 +260,23 @@ func (cs *ConfigStore) Load() (*Config, error) {
 	var cfg Config
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse TOML config %q: %w", cs.path, err)
+	}
+	if cfg.ConfigVersion < CurrentConfigVersion {
+		oldVersion := cfg.ConfigVersion
+		backup, migrateErr := migrateBetterTabConfig(cs.path, oldVersion)
+		if migrateErr != nil {
+			return nil, migrateErr
+		}
+		data, err = os.ReadFile(cs.path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read migrated bettertab config %q: %w", cs.path, err)
+		}
+		cfg = Config{}
+		if err := toml.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse migrated bettertab config %q: %w", cs.path, err)
+		}
+		cfg.MigratedFrom = oldVersion
+		cfg.MigrationBackup = backup
 	}
 
 	if cfg.UpdateIntervalMs <= 0 {

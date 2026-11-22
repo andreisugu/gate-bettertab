@@ -3,10 +3,59 @@ package bettertab
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	spmanager "github.com/andreisugu/gate-stonyperms/manager"
 )
+
+func TestConfigStoreMigratesOldConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bettertab.toml")
+	old := `update_interval_ms = 750
+sort_players = true
+default_group = "default"
+
+[roles.vip]
+prefix = "<green>[VIP] </green>"
+weight = 100
+
+[[groups]]
+name = "default"
+servers = ["*"]
+format = "%prefix%%username%"
+`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewConfigStore(path)
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ConfigVersion != CurrentConfigVersion {
+		t.Fatalf("version = %d, want %d", cfg.ConfigVersion, CurrentConfigVersion)
+	}
+	if cfg.UpdateIntervalMs != 750 {
+		t.Fatalf("existing value lost: %d", cfg.UpdateIntervalMs)
+	}
+	if cfg.Roles["vip"].DisplayName != "Vip" {
+		t.Fatalf("display_name not migrated: %+v", cfg.Roles["vip"])
+	}
+	if cfg.MigrationBackup == "" {
+		t.Fatal("expected backup path")
+	}
+	if _, err := os.Stat(cfg.MigrationBackup); err != nil {
+		t.Fatalf("backup missing: %v", err)
+	}
+	upgraded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(upgraded), "config_version = 2") {
+		t.Fatalf("missing version marker:\n%s", upgraded)
+	}
+}
 
 func TestConfigStoreLoadAndMatch(t *testing.T) {
 	tmpDir := t.TempDir()
